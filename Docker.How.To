@@ -1,0 +1,149 @@
+# Docker
+
+Two-stage image: Go toolchain builds, `scratch` ships. `/config` is the only
+volume. No TLS in this app — put a reverse proxy in front.
+
+## Quick start
+
+1. Edit `docker-compose.yaml` — decide where `/config` lives (named volume, or
+   a path like `/srv/mailclient:/config`).
+2. `./build.sh --docker`
+3. `docker compose up -d`
+4. Edit `mail_client.json` in that directory. It was written by step 3 with
+   random keys. Fill in the values below, then `docker compose restart`.
+
+Port is published to `127.0.0.1:8080`. Reachable from the Docker host only.
+Point your proxy at it.
+
+The container is named `starry_go_mail`, not `<project>-<service>-1`. **On an
+existing deployment, clear out the old one once** — renaming the service
+orphans the previous container rather than replacing it:
+
+```bash
+docker compose down --remove-orphans
+docker compose up -d
+docker ps                          # starry_go_mail
+docker image rm mail_client        # the old image, if nothing else wants it
+```
+
+## What to fill in
+
+```bash
+cd /srv/mailclient          # bind mount; for a named volume:
+                            #   docker volume inspect <project>_config -f '{{.Mountpoint}}'
+./mailctl hash              # paste output as superuser_password_hash
+```
+
+Required: `superuser_username`, `superuser_password_hash`, `email_domains`.
+
+`trusted_proxies` already covers RFC1918 and the loopbacks — leave it. The
+address Docker connects from is assigned by the daemon and changes when the
+network is recreated, so there is nothing stable to pin.
+
+`superuser_ip_allowed` defaults to the same ranges. Set it to the addresses you
+administer from, which are usually public.
+
+```json
+"superuser_username": "root",
+"superuser_password_hash": "$2b$...",
+"superuser_ip_allowed": ["203.0.113.9"],
+"email_domains": {
+  "example.com": {
+    "imap_host": "mail.example.com", "imap_port": 993,
+    "imap_sec":  "tls",              "imap_user_style": "user@domain",
+    "smtp_host": "mail.example.com", "smtp_port": 587,
+    "smtp_sec":  "starttls",         "smtp_user_style": "user@domain"
+  }
+}
+```
+
+Check, restart, sign in at `/admin`, create accounts:
+
+```bash
+./mailctl checkjson         # exits 1 if the server would refuse it
+docker compose restart
+```
+
+Every field is documented in `mail_client.json.example`, beside it.
+
+## The two IP lists
+
+| | holds |
+|---|---|
+| `trusted_proxies` | what connects **to** this server — your proxy |
+| `superuser_ip_allowed` | what the superuser connects **from** — people, via `X-Forwarded-For` |
+
+No shared entries. `trusted_proxies` ships correct — leave it. Set
+`superuser_ip_allowed`, or the superuser signs in from anywhere on your
+private networks.
+
+Your proxy must send the header — nginx:
+
+```nginx
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+```
+
+## Build
+
+```bash
+./build.sh --docker                                  # do this
+docker build -t starry_go_mail .                        # not this alone
+```
+
+`build.sh` regenerates `src/static/` and passes the pepper. A bare
+`docker build` ships a stale stylesheet, no brotli, and no pepper.
+
+## The pepper
+
+`build.sh` creates `pepper.txt` if missing. It will not create one where a
+database already exists without it — `./build.sh --new-pepper` overrides, and
+destroys every stored password and TOTP secret.
+
+**Back it up, separately from the volume.** It exists so the volume alone
+cannot be decrypted. It is not regenerable.
+
+## mailctl
+
+In the image at `/mailctl`, and copied into `/config` at startup. `-dir`
+defaults to the current directory.
+
+```bash
+cd /srv/mailclient && ./mailctl info        # from the host
+docker compose run --rm --no-deps --entrypoint /mailctl starry_go_mail info
+```
+
+## Backup
+
+```bash
+# the volume -- config, database, scan databases
+docker run --rm -v <project>_config:/config -v "$PWD:/out" \
+    alpine tar czf /out/backup.tgz --exclude=./mailctl -C /config .
+
+# pepper.txt -- store it somewhere the above is NOT
+cat pepper.txt
+```
+
+Restore, in this order:
+
+```bash
+cp /path/to/pepper.txt .    # FIRST -- build.sh generates a different one otherwise
+./build.sh --docker
+# restore the volume, then:
+./mailctl info              # "key ok" = right pepper; "key FAILED" = wrong
+```
+
+## Gotchas
+
+- **No shell, no curl.** `docker compose exec ... sh` fails. Only `/starry_go_mail`
+  and `/mailctl` exist. No in-container healthcheck is possible; `GET /healthz`
+  is for something outside.
+- **No `/usr/share/zoneinfo`.** Do not `COPY` it — alpine has none, and the
+  binary compiles in `time/tzdata`.
+- **`/tmp` is a tmpfs in compose.** Uploads over 8MB spill there; `scratch` has
+  no `/tmp` of its own.
+- **Assets are embedded.** A stylesheet change needs a rebuilt image.
+- **`-debug` is local only.** In a container it writes to a layer that
+  disappears on recreate. The container takes no arguments.
+- **First run writes `mail_client.json` without validating it.** The second
+  start validates. Run `mailctl checkjson` after editing.
+- **Editing the config needs a restart.** It is read once, at startup.

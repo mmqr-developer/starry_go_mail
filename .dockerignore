@@ -1,0 +1,47 @@
+# What must NOT reach the build context.
+#
+# The build stage does `COPY . .`, so anything here is sent to the daemon and
+# lands in an intermediate layer. The final stage is scratch and copies only the
+# two binaries out, so none of it ships -- but an intermediate layer is still a
+# readable copy of whatever went in, cached on the build host.
+#
+# dev_config is the sharp one: it holds a live Anthropic API key, the session
+# and secret keys, and a database of encrypted mail passwords. None of it is
+# needed to compile anything.
+dev_config/
+pepper.txt
+.env
+
+# The pepper arrives as --build-arg PEPPER, never as a file, and a pepper.txt
+# in the context would be the wrong one anyway.
+
+# 101MB of PHP that nothing in the build reads. It is a reference checkout kept
+# beside the source, and sending it makes every build slower for no reason.
+snappymail/
+
+# Not read by the build, and .git is the largest of them.
+.git/
+.gitignore
+.dockerignore
+.claude/
+
+# The host's own build output. Rebuilt inside the image from source, so a copy
+# from the host is at best wasted bytes and at worst a stale binary somebody
+# later mistakes for the built one.
+/starry_go_mail
+/mailctl
+/funcsdoc
+web_proto_worker
+st_claude
+
+# Documentation and scratch.
+*.md
+things_to_do_1.txt
+*.swp
+*.swo
+*~
+
+# NOT ignored, and must not be: src/mail_client.json.example and src/schema.sql
+# are //go:embed-ed (see src/seed.go and src/db.go), so a build without them does
+# not compile. An embed path cannot contain "..", which is why those two data
+# files live under src/ with the code rather than at the root with the docs.

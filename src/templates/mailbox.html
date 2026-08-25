@@ -1,0 +1,411 @@
+{{define "mailbox"}}
+<div id="app-body" class="app">
+  {{/* The sidebar toggle, for narrow windows.
+
+       The checkbox lives here rather than inside the sidebar, and it has to:
+       the CSS collapses the sidebar with `:not(:checked) ~ #sidebar`, which
+       needs the input to come FIRST and to be a sibling. It also means an
+       out-of-band swap of the sidebar leaves the open/shut state alone --
+       the state belongs to the window, not to the folder list.
+
+       Off-screen rather than display:none so it stays focusable: it is the
+       tab stop for this control, and the label wears its focus ring. The
+       label itself is in the account bar (see "switcher"), which is the one
+       part of the sidebar that does not collapse. */}}
+  <input type="checkbox" id="sidebar-toggle" class="sr-only">
+  {{template "sidebar" .}}
+  {{template "list" .}}
+
+  {{template "mailbox-pane" .}}
+</div>
+{{end}}
+
+
+{{/* The reading pane with nothing open in it.
+
+     Its own definition because arriving in a folder has to put it back: the
+     list is swapped for the new folder's messages, and the message that was
+     open belongs to the folder you just left. */}}
+{{define "mailbox-pane"}}
+<main id="main-content" tabindex="-1" class="view-pane"{{if .IsOOB "mailbox-pane"}} hx-swap-oob="true"{{end}}>
+  {{/* Empty, but present: the toolbar and the card are what a message click
+       swaps, and a target that only exists once something is open is a click
+       that does nothing the first time. */}}
+  {{template "reader-toolbar" .}}
+  <div id="msg-content" class="view-card">
+    {{if .Error}}
+    <div class="notice-bar">
+      <strong>Could not reach the mail server.</strong>
+      <span>{{.Error}}</span>
+      <a hx-boost="true" class="btn" href="/app/settings">Check the account settings</a>
+    </div>
+    {{end}}
+    <p class="placeholder">Select any message in the list to view it here.</p>
+  </div>
+</main>
+{{end}}
+
+
+{{/* The reading pane on its own.
+
+     Its own definition because it is swapped on its own: changing how a
+     message is shown -- plain text, HTML, with images -- changes nothing
+     about the folder list or the message list beside it, so re-rendering
+     those costs an IMAP round trip and repaints two panes to change a
+     third. handleMessage renders this alone when htmx says it is what
+     the request is aimed at; see paneRequest.
+
+     It keeps the id the swap targets, so an outerHTML swap replaces it
+     with itself rather than nesting a second pane inside the first. */}}
+{{define "reader-pane"}}
+  <main id="main-content" tabindex="-1" class="view-pane"{{if .IsOOB "reader-pane"}} hx-swap-oob="true"{{end}}>
+    {{/* The sub-templates each take the page and reach for .Reader themselves,
+         so that every one of them can also be rendered on its own. */}}
+    {{if .Reader}}
+    {{template "reader-toolbar" .}}
+
+    {{template "reader-content" $}}
+    {{end}}
+  </main>
+{{end}}
+
+{{define "reader"}}
+<div id="app-body" class="app">
+  {{/* The sidebar toggle, for narrow windows.
+
+       The checkbox lives here rather than inside the sidebar, and it has to:
+       the CSS collapses the sidebar with `:not(:checked) ~ #sidebar`, which
+       needs the input to come FIRST and to be a sibling. It also means an
+       out-of-band swap of the sidebar leaves the open/shut state alone --
+       the state belongs to the window, not to the folder list.
+
+       Off-screen rather than display:none so it stays focusable: it is the
+       tab stop for this control, and the label wears its focus ring. The
+       label itself is in the account bar (see "switcher"), which is the one
+       part of the sidebar that does not collapse. */}}
+  <input type="checkbox" id="sidebar-toggle" class="sr-only">
+  {{template "sidebar" .}}
+  {{template "list" .}}
+
+  {{template "reader-pane" .}}
+</div>
+{{end}}
+
+
+{{/* The parts of the reading pane that change when a different message is
+     opened -- and only those.
+
+     The toolbar is 80% of what the reading pane weighs, and almost all of it
+     is the same for every message in a folder: the archive, spam and delete
+     buttons act on whatever the form is carrying, and the move-to-folder menu
+     is the folder list. Re-sending that to change which message is open is
+     re-sending the answer to a question nobody asked.
+
+     So the toolbar stays where it is and these five pieces are swapped into
+     it out-of-band. Each is one definition used in both places -- drawn in
+     place when the page is built, and sent on its own afterwards -- because
+     two copies of a button would drift and the way they would drift is that
+     the toolbar stops matching the message under it. */}}
+
+{{define "tb-state"}}<span id="msg-state"{{if .IsOOB "tb-state"}} hx-swap-oob="true"{{end}}>
+  <input type="hidden" name="folder" value="{{.Folder}}">
+  <input type="hidden" name="uid" value="{{.Reader.Message.UID}}">
+  {{/* Which message to come back to, for the actions that leave it where it
+       is. See handleMessageAction for why only starring uses it. */}}
+  <input type="hidden" name="stay" value="{{.Reader.Message.UID}}">
+  <input type="hidden" name="view" value="{{.Reader.View}}">
+</span>{{end}}
+
+
+{{/* Star and unread are the two flags with a visible state, so they are one
+     button each whose verb flips rather than a pair that are always both
+     present -- the same reasoning as the Show/Hide password control. */}}
+{{/* tb-optional for the same reason as the folder group: starring is not
+     what a narrow screen is for, and the list's toolbar still stars. */}}
+{{define "tb-flag"}}<div id="msg-flag" class="btn-group tb-optional"{{if .IsOOB "tb-flag"}} hx-swap-oob="true"{{end}}>
+  {{with .Reader}}
+  {{if .Message.Flagged}}
+  <button type="submit" class="btn is-on" title="Remove star" aria-label="Remove the star from this message"
+          formaction="/app/messages/action?action=unflag&amp;folder={{$.Folder | urlquery}}">{{icon "star-on"}}</button>
+  {{else}}
+  <button type="submit" class="btn" title="Star" aria-label="Star this message"
+          formaction="/app/messages/action?action=flag&amp;folder={{$.Folder | urlquery}}">{{icon "star"}}</button>
+  {{end}}
+  <button type="submit" class="btn" title="Mark unread" aria-label="Mark this message unread"
+          formaction="/app/messages/action?action=unseen&amp;folder={{$.Folder | urlquery}}">{{icon "envelope"}}</button>
+  {{end}}
+</div>{{end}}
+
+
+{{define "tb-send"}}<div id="msg-send" class="btn-group"{{if .IsOOB "tb-send"}} hx-swap-oob="true"{{end}}>
+  {{with .Reader}}
+  <a hx-boost="true" class="btn" href="/app/compose/reply/{{.Message.UID}}?folder={{$.Folder}}" title="Reply" aria-label="Reply">{{icon "reply"}}</a>
+  <a hx-boost="true" class="btn" href="/app/compose/replyall/{{.Message.UID}}?folder={{$.Folder}}" title="Reply to all" aria-label="Reply to all">{{icon "replyall"}}</a>
+  <a hx-boost="true" class="btn" href="/app/compose/forward/{{.Message.UID}}?folder={{$.Folder}}" title="Forward" aria-label="Forward">{{icon "forward"}}</a>
+  {{end}}
+</div>{{end}}
+
+
+{{define "tb-more"}}<div id="msg-more" class="btn-group"{{if .IsOOB "tb-more"}} hx-swap-oob="true"{{end}}>
+  {{with .Reader}}
+        <details class="menu">
+          <summary class="btn" title="More actions" aria-label="More actions">{{icon "menu"}}</summary>
+          <menu class="drop-menu right-edge">
+            <li><button type="button" class="drop-item" data-print>
+              <span class="drop-icon" aria-hidden="true">{{icon "print"}}</span>Print</button></li>
+            <li>{{template "tb-open" $}}</li>
+            {{/* Read and filed in one press -- see the note on the same entry
+                 in the message list's menu. `stay` is deliberately not set:
+                 the message is leaving this folder, so there is nothing to
+                 stay on. */}}
+            {{if special $.Folders "junk"}}
+            <li class="drop-sep"><button type="submit" class="drop-item"
+                    formaction="/app/messages/action?action=spam-seen&amp;folder={{$.Folder | urlquery}}">
+              <span class="drop-icon" aria-hidden="true">{{icon "warning"}}</span>Mark as read and spam</button></li>
+            {{end}}
+            <li class="drop-sep">{{template "tb-source" $}}</li>
+            <li>{{template "tb-download" $}}</li>
+          </menu>
+        </details>
+  {{end}}
+</div>{{end}}
+
+
+{{define "tb-nav"}}<div id="msg-nav" class="btn-group"{{if .IsOOB "tb-nav"}} hx-swap-oob="true"{{end}}>
+  {{with .Reader}}
+      {{/* Previous and next within this page of the list. Absent rather than
+           disabled at either end -- see neighbours() for why the page is the
+           boundary. */}}
+        {{if .Prev}}
+        <a hx-boost="true" class="btn" title="Newer message" aria-label="Newer message"
+           href="/app/message/{{.Prev}}?folder={{$.Folder}}&amp;view={{$.Reader.View}}">{{icon "prev"}}</a>
+        {{else}}
+        <span class="btn is-disabled" aria-hidden="true">{{icon "prev"}}</span>
+        {{end}}
+        {{if .Next}}
+        <a hx-boost="true" class="btn" title="Older message" aria-label="Older message"
+           href="/app/message/{{.Next}}?folder={{$.Folder}}&amp;view={{$.Reader.View}}">{{icon "next"}}</a>
+        {{else}}
+        <span class="btn is-disabled" aria-hidden="true">{{icon "next"}}</span>
+        {{end}}
+  {{end}}
+</div>{{end}}
+
+
+{{/* Everything below the toolbar: the headers, the view ladder, the notices,
+     the body and the attachments. All of it is about this message, so all of
+     it is what a click actually replaces. */}}
+{{define "reader-content"}}<div id="msg-content" class="view-card"{{if .IsOOB "reader-content"}} hx-swap-oob="true"{{end}}>
+  {{with .Reader}}
+      <div class="view-head">
+        <h1 class="view-subject">{{if .Message.Subject}}{{.Message.Subject}}{{else}}(no subject){{end}}</h1>
+        <div class="view-from">{{.Message.From}}</div>
+        <div class="view-meta">
+          {{longDate .Message.Date}}<br>
+          To: {{if .Message.To}}{{.Message.To}}{{else}}(undisclosed){{end}}
+          {{if .Message.Cc}}<br>Cc: {{.Message.Cc}}{{end}}
+        </div>
+      </div>
+
+      {{/* The view ladder. Four links rather than a "show images" toggle,
+           because markup, the sender's own images and remote images are three
+           separate decisions -- viewmode.go has the reasoning. Links and not
+           buttons: each one is a different rendering of the same message at a
+           URL of its own, so it is shareable, bookmarkable and works with the
+           back button. */}}
+      <div class="view-modes" role="group" aria-label="How to show this message">
+        <span class="view-modes-label" aria-hidden="true">Show as</span>
+        {{$r := .}}
+        {{range bodyViews}}
+          {{if or (not .View.IsHTML) $r.Body.HasHTML}}
+            {{if eq .View $r.View}}
+            <span class="seg is-on" aria-current="true">{{.Label}}</span>
+            {{else}}
+            {{/* Aimed at the reading pane rather than the page: which rung
+                 of the ladder a message is shown at changes nothing about the
+                 folder list or the message list, and swapping those too
+                 repaints the window and costs two IMAP round trips. The
+                 server reads the target from the HX-Target header and renders
+                 the pane alone; the href is unchanged, so this is still an
+                 ordinary page load with scripting off. */}}
+            <a hx-boost="true" hx-target="#msg-content" hx-swap="outerHTML"
+               class="seg" title="{{.Title}}"
+               href="/app/message/{{$r.Message.UID}}?folder={{$.Folder}}&amp;view={{.View}}">{{.Label}}</a>
+            {{end}}
+          {{end}}
+        {{end}}
+
+        {{/* Said only at the plain rung, and only when there is HTML to say it
+             about. Two different notes, because the two cases are different
+             things to know:
+
+             The sender sent both parts -- you are reading the one they wrote
+             as text, and there is a richer version a click away.
+
+             The sender sent only HTML -- there is no text part, so what is on
+             screen is this app's rendering of the markup. That is worth
+             saying: a table or a layout the sender relied on may have come
+             out badly, and without the note a mangled newsletter looks like a
+             broken message rather than a flattened one.
+
+             Beside the buttons rather than in a notice-bar of its own: it is
+             about the control, not about the message, and the bars below are
+             reserved for things that were withheld. */}}
+        {{if and (not $r.View.IsHTML) $r.Body.HasHTML}}
+        <span class="view-modes-note">
+          {{if $r.Body.TextFromHTML}}
+            {{icon "warning"}} HTML email rendered as text.
+          {{else}}
+            There is an HTML version.
+          {{end}}
+        </span>
+        {{end}}
+      </div>
+
+      {{/* What the PGP wrapper turned out to mean. Above the body rather than
+           below it, because it is the thing that decides how to read what
+           follows.
+
+           Three states with three appearances, and the middle one is the point
+           of the whole strip: a message that decrypted but whose signature does
+           NOT verify is readable and untrustworthy at the same time, which is
+           the one combination a quiet grey line would fail to communicate. */}}
+      {{if .Message.PGPStatus}}
+      <div class="notice-bar pgp-bar{{if .Message.PGPVerified}} pgp-ok{{else if .Message.PGPFailed}} pgp-bad{{end}}">
+        <span class="pgp-mark" aria-hidden="true">
+          {{if eq .Message.PGPKind "encrypted"}}{{icon "lock"}}{{else}}{{icon "shield"}}{{end}}
+        </span>
+        <span>{{.Message.PGPStatus}}</span>
+      </div>
+      {{end}}
+
+      {{if gt .Body.BlockedRemote 0}}
+      <div class="notice-bar">
+        <span><strong>{{.Body.BlockedRemote}}</strong> remote image{{if ne .Body.BlockedRemote 1}}s were{{else}} was{{end}} not fetched.</span>
+        <span class="notice-aside">Fetching them tells the sender you opened this message, and roughly where from.</span>
+        <a hx-boost="true" hx-target="#msg-content" hx-swap="outerHTML"
+           class="btn" href="/app/message/{{.Message.UID}}?folder={{$.Folder}}&amp;view=html-remote">Fetch them anyway</a>
+      </div>
+      {{end}}
+      {{if gt .Body.BlockedInline 0}}
+      <div class="notice-bar notice-quiet">
+        <span><strong>{{.Body.BlockedInline}}</strong> image{{if ne .Body.BlockedInline 1}}s{{end}} sent with this message {{if ne .Body.BlockedInline 1}}are{{else}}is{{end}} not shown.</span>
+        <span class="notice-aside">These came with the message. Showing them fetches nothing.</span>
+        <a hx-boost="true" hx-target="#msg-content" hx-swap="outerHTML"
+           class="btn" href="/app/message/{{.Message.UID}}?folder={{$.Folder}}&amp;view=html-inline">Show them</a>
+      </div>
+      {{end}}
+
+      {{/* The message body renders inside a sandboxed iframe. The sandbox
+           attribute is empty on purpose -- no allow-scripts, no
+           allow-same-origin -- so the document has no script execution, no
+           access to this page's DOM, no cookies and no storage. That is the
+           second of the two independent defences described in sanitize.go, and
+           it is the one that still holds if the sanitiser is ever bypassed.
+           Removing or loosening it undoes that. */}}
+      <div class="view-body">
+        <iframe title="Message body" sandbox referrerpolicy="no-referrer"
+                src="{{.BodyURL}}"></iframe>
+      </div>
+
+      {{if .Message.Attachments}}
+      <div class="attachments">
+        {{range .Message.Attachments}}
+          {{if not .IsEmbedded}}
+          <a class="attachment" download
+             href="/app/message/{{$r.Message.UID}}/part/{{.Index}}?folder={{$.Folder}}">
+            <span aria-hidden="true">📎</span>
+            {{.Filename}} <span class="attachment-size">{{humanSize .Size}}</span>
+          </a>
+          {{end}}
+        {{end}}
+      </div>
+      {{end}}
+  {{end}}
+</div>{{end}}
+
+
+
+
+{{/* The three entries in the More menu that name this message. Print and
+     "mark as read and spam" act on whatever the form is carrying, so they are
+     the same for every message and stay where they are; these three carry the
+     uid in a URL and are swapped on their own. */}}
+{{define "tb-open"}}<a id="msg-open" class="drop-item" target="_blank" rel="noopener noreferrer"
+   href="{{.Reader.BodyURL}}"{{if .IsOOB "tb-open"}} hx-swap-oob="true"{{end}}>
+  <span class="drop-icon" aria-hidden="true">{{icon "external"}}</span>Open in a new window</a>{{end}}
+
+{{define "tb-source"}}<a id="msg-source" class="drop-item" target="_blank" rel="noopener noreferrer"
+   href="/app/message/{{.Reader.Message.UID}}/source?folder={{.Folder}}"{{if .IsOOB "tb-source"}} hx-swap-oob="true"{{end}}>
+  <span class="drop-icon" aria-hidden="true">{{icon "code"}}</span>View the original message</a>{{end}}
+
+{{define "tb-download"}}<a id="msg-download" class="drop-item"
+   href="/app/message/{{.Reader.Message.UID}}/source?folder={{.Folder}}&amp;download=1"{{if .IsOOB "tb-download"}} hx-swap-oob="true"{{end}}>
+  <span class="drop-icon" aria-hidden="true">{{icon "download"}}</span>Download the original message</a>{{end}}
+
+
+{{/* The reader's toolbar.
+
+     Its own definition because the reading pane has two states and only one of
+     them has a toolbar: arriving from the mailbox there is nothing in it, so
+     the whole thing has to be sent; arriving from another message it is
+     already on screen and only the pieces naming the message need to follow.
+     See handleMessage.
+
+     Every button in it acts on the open message, so they share one form
+     carrying its UID. The verb rides in each button's own formaction -- see
+     the note in the list template. */}}
+{{define "reader-toolbar"}}<form id="msg-toolbar" method="POST" action="/app/messages/action"
+      class="btn-toolbar view-toolbar"{{if .IsOOB "reader-toolbar"}} hx-swap-oob="true"{{end}}>
+  {{if .Reader}}
+
+      {{template "tb-state" $}}
+
+      <div class="btn-group">
+        <a hx-boost="true" class="btn" href="/app/mailbox?folder={{$.Folder}}" title="Close" aria-label="Close this message">{{icon "close"}}</a>
+      </div>
+
+      <div class="btn-group">
+        {{if special $.Folders "archive"}}
+        <button type="submit" class="btn" title="Archive" aria-label="Archive this message"
+                formaction="/app/messages/action?action=archive&amp;folder={{$.Folder | urlquery}}">{{icon "archive"}}</button>
+        {{end}}
+        {{if special $.Folders "junk"}}
+          {{if eq $.Folder (special $.Folders "junk")}}
+          <button type="submit" class="btn" title="Not spam" aria-label="Move this message back to the inbox"
+                  formaction="/app/messages/action?action=notspam&amp;folder={{$.Folder | urlquery}}">{{icon "check"}}</button>
+          {{else}}
+          <button type="submit" class="btn" title="Spam" aria-label="Move this message to Junk"
+                  formaction="/app/messages/action?action=spam&amp;folder={{$.Folder | urlquery}}">{{icon "warning"}}</button>
+          {{end}}
+        {{end}}
+        <button type="submit" class="btn" title="Delete" aria-label="Delete this message"
+                formaction="/app/messages/action?action=delete&amp;folder={{$.Folder | urlquery}}">{{icon "trash"}}</button>
+      </div>
+
+      {{/* tb-optional: hidden below 1350px, where the toolbar cannot fit on
+           one row. Filing a message is a thing you do when you have finished
+           with it, and the list's own toolbar can move this message too --
+           so it is a better thing to lose than Reply or Delete. */}}
+      <div class="btn-group tb-optional">
+        <details class="menu">
+          <summary class="btn" title="Move to a folder" aria-label="Move this message to a folder">{{icon "folder"}}</summary>
+          {{template "move-menu" $}}
+        </details>
+      </div>
+
+      {{/* Star and unread are the two flags with a visible state, so they are
+           one button each whose verb flips rather than a pair that are always
+           both present -- the same reasoning as the Show/Hide password
+           control. */}}
+      {{template "tb-flag" $}}
+
+      {{template "tb-send" $}}
+
+      {{template "tb-more" $}}
+
+      <span class="toolbar-gap"></span>
+
+      {{template "tb-nav" $}}
+  {{end}}
+</form>{{end}}

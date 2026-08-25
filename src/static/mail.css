@@ -1,0 +1,1633 @@
+/* Mail client styling.
+ *
+ * The palette and geometry are taken from the SnappyMail instance this mirrors
+ * (v2.38.2, Default theme) rather than eyeballed -- the values in :root below
+ * are that theme's own custom properties, read out of the running site.
+ *
+ * The shape worth understanding before changing any of it: the page ground is
+ * the slate colour, and the message list and the reader are **white cards
+ * floating on it**, each with its own toolbar sitting on the slate above the
+ * card rather than inside it. That is the original's signature and the thing a
+ * flat three-pane grid gets wrong; every gutter in the layout is deliberate.
+ *
+ * The longer reasoning lives in DESIGN_NOTES.md; this file keeps only the short
+ * section dividers.
+ */
+
+:root {
+  /* SnappyMail Default theme */
+  --c-chrome:        #48525c;  /* --main-bg-color: the ground everything sits on */
+  --c-chrome-dark:   #3e474f;
+  /* The New message green, darkened from the theme's own #84ab04 / #6f9003.
+     Every green surface in the app is one of these two -- .btn-primary,
+     .btn-compose, the account avatar, the focus ring -- so the shade is
+     changed here and nowhere else.
+     The darker pair is also the readable one: white on #84ab04 measures 2.7:1
+     and fails WCAG AA, while #5f7d02 measures 4.8:1 and passes. Every green
+     surface here carries white text. */
+  --c-accent:        #5f7d02;
+  --c-accent-dark:   #4a6102;
+  --c-surface:       #ffffff;  /* the cards */
+  --c-text:          #333333;  /* --main-color */
+  --c-text-dim:      #767676;
+  --c-divider:       rgba(153, 153, 153, 0.2);
+  --c-border:        #aaaaaa;  /* --border-color */
+  --c-border-soft:   #cccccc;
+  --c-selected:      #dbeaf8;
+  --c-row-open:      #b4d3f0;
+  --c-hover:         #f2f6fa;
+  --c-sidebar-text:  #ffffff;  /* --folders-color */
+  --c-sidebar-sel:   rgba(0, 0, 0, 0.5);   /* --folders-selected-bg-color */
+  --c-sidebar-hover: rgba(0, 0, 0, 0.28);
+  --c-toolbar-bg:    #eeeeee;  /* --message-list-toolbar-bg-color */
+  --c-menu-hover:    #48525c;  /* --dropdown-menu-hover-bg-color */
+  --c-danger:        #c0392b;
+  /* Navy, for the sidebar's own buttons. Not from the theme -- it has no
+     second button colour -- and chosen to sit beside the green without
+     competing with it: the green is the one thing you do most, these are the
+     three you do occasionally. White on #26406e measures 10.3:1. */
+  --c-navy:          #26406e;
+  --c-navy-dark:     #1b2f52;
+
+  --w-sidebar: 200px;          /* #rl-left */
+  /* The message list scales with the window instead of being a fixed 420px,
+     but not the way SnappyMail does it. Theirs is 35vw with a 320px floor and
+     a 50vw ceiling, which suits their breakpoints and would cost us: measured
+     against ours, 35vw gives a SMALLER reading pane than a fixed 420 at every
+     width above the breakpoint -- 816px instead of 956px at 1600, and 1024
+     instead of 1276 at 1920. The list would grow to fill a wide window, which
+     is the wrong thing to spend a wide window on.
+
+     30vw capped at the OLD fixed width is the version that is never worse:
+     354px of list at 1181, where every pixel of reader counts (603px of reader
+     instead of 537), and 420px from about 1400 upwards -- exactly what it has
+     always been. A larger cap was tried and rejected: 460px would have taken
+     40px off the reader at every width above 1400, spending a wide window on
+     the list, which is the thing this was supposed to stop.
+
+     The 320px floor is the width below which sender and subject stop being
+     readable side by side. */
+  --w-list: clamp(320px, 30vw, 420px);
+  /* 42px of button plus the toolbar's own 10px above and below. It follows
+     --toolbar-scale and has to be recomputed with it, which is why the sum is
+     written out. Four things use it -- the toolbars, the account switcher, the
+     compose toolbar and the admin brand bar -- and they are meant to line up
+     across the top of the window, so it is one value rather than four. */
+  --h-toolbar: 62px;
+  /* The toolbar buttons are drawn 50% larger than a .btn elsewhere. They are
+     the app's primary controls, they are all icon-only, and at the base 28px
+     the icons had about 14px to live in. Everything in the toolbar block below
+     multiplies the base metric by this. */
+  --toolbar-scale: 1.5;
+  --radius:      5px;          /* --border-radius, on the cards */
+  --radius-btn:  3px;          /* .btn */
+  --gap:         8px;          /* the slate showing between the cards */
+
+  /* Menu contents scale from this. It is defined here as well as on the menus
+     themselves so that a class borrowed *out* of a menu -- .drop-icon is
+     reused by the folder manager -- still resolves. An undefined custom
+     property inside calc() makes the whole declaration invalid, so the
+     borrowed icon silently lost its width and its font size, and the folder
+     name wrapped onto a second line. A root fallback is one line; hunting
+     that down twice is not. */
+  --menu-scale: 1;
+
+  --font: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  color: var(--c-text);
+  font: 14px/1.45 var(--font);
+}
+
+/* The page ground, on every document: the shell and the three auth pages are
+ * the only two full documents, and .app, .auth and .sidebar all set no
+ * background of their own, so this one rule is what shows behind everything
+ * that is not a card.
+ *
+ * The slate stays as background-color rather than being replaced. It is what
+ * paints if the image 404s or has not arrived yet, so a slow load degrades to
+ * the original design instead of to white text on white.
+ *
+ * The scrim over the image is what keeps the sidebar readable. Folder names are
+ * white on the ground with no background of their own (.folder is transparent),
+ * and the image's nebula patches are far brighter than the rest of it -- so
+ * without the scrim, contrast would depend on where the window happened to crop
+ * the starfield. It is kept light enough to leave the stars visible.
+ *
+ * fixed + cover: the square fills any window shape without tiling, and the
+ * starfield stays put rather than sliding when a pane scrolls.
+ */
+html {
+  background-color: var(--c-chrome);
+  background-image:
+    linear-gradient(rgba(20, 24, 30, .38), rgba(20, 24, 30, .38)),
+    url("/static/starry_background.jpg");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  background-attachment: fixed;
+}
+
+/* — accessibility — */
+.skip-link {
+  position: absolute; z-index: 100; left: 8px; top: 8px;
+  padding: 8px 12px; background: #fff; color: var(--c-text);
+  border: 1px solid var(--c-accent); text-decoration: none;
+  transform: translateY(-250%);
+}
+.skip-link:focus { transform: none; }
+:focus { outline: none; }
+:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.view-card :focus-visible, .drop-menu :focus-visible, .acct-menu :focus-visible {
+  outline: 2px solid var(--c-accent-dark);
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* — the three-pane frame — */
+.app {
+  display: grid;
+  grid-template-columns: var(--w-sidebar) var(--w-list) minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+  gap: var(--gap);
+  padding: 0 var(--gap) var(--gap) 0;
+}
+
+/* — buttons —
+   Flat white with a hairline border, 3px radius, 28px tall, 9px of side
+   padding. Measured off the running instance rather than taken from the
+   theme's stylesheet: the Default theme defines a grey vertical gradient for
+   .btn, and this install overrides it to plain white -- so a faithful copy of
+   the theme file would have looked wrong next to the thing it was copying. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 28px; padding: 0 9px;
+  background: #fff;
+  color: var(--c-text);
+  border: 1px solid rgba(0, 0, 0, .2);
+  border-radius: var(--radius-btn);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .05);
+  font: 14px/28px var(--font); text-align: center; text-decoration: none;
+  cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--c-hover); }
+.btn:active { box-shadow: inset 0 2px 4px rgba(0, 0, 0, .15); }
+.btn.is-on { background: var(--c-selected); }
+.btn.is-disabled { opacity: .4; cursor: default; }
+.btn-primary { background: var(--c-accent); border-color: var(--c-accent-dark); color: #fff; }
+.btn-primary:hover { background: var(--c-accent-dark); }
+.btn-danger { background: var(--c-danger); border-color: var(--c-danger); color: #fff; }
+.btn-link {
+  background: none; border: 0; box-shadow: none; color: #2a6496;
+  text-decoration: underline; padding: 0; min-height: auto;
+}
+
+/* A toolbar sits on the slate, above its card. Buttons in a group touch and
+   share their inner borders, which is how the original separates "these three
+   are related" from "these are two different things". */
+.btn-toolbar {
+  /* min-height, NOT height, and the difference is a bug rather than a
+     preference.
+
+     The value is a shared alignment: the toolbars, the account switcher, the
+     compose toolbar and the admin brand bar all use it so they line up across
+     the top of the window. But both toolbars also carry flex-wrap as a last
+     resort for a narrow window -- and a wrapped row inside a box with a FIXED
+     height does not make the box taller. It paints outside it, over whatever
+     is below.
+
+     Measured in the browser at a 256px reading pane: the reader's toolbar
+     needed 205px of rows inside a 62px box, so 143px of buttons were drawn on
+     top of the message's subject and date. It looked like a rendering fault
+     and was reachable at any window narrower than about 1350px.
+
+     min-height keeps the alignment in the ordinary case -- one row, 62px, same
+     as everything else -- and lets the box grow when it genuinely cannot fit,
+     which pushes the message down instead of burying it. */
+  min-height: var(--h-toolbar); flex: none;
+  display: flex; align-items: center; gap: 6px;
+  padding: 10px 0;
+}
+.btn-group { display: inline-flex; }
+.btn-group > .btn, .btn-group > .menu > .btn { border-radius: 0; margin-left: -1px; }
+.btn-group > *:first-child > .btn,
+.btn-group > .btn:first-child {
+  border-top-left-radius: var(--radius-btn);
+  border-bottom-left-radius: var(--radius-btn);
+  margin-left: 0;
+}
+.btn-group > *:last-child > .btn,
+.btn-group > .btn:last-child {
+  border-top-right-radius: var(--radius-btn);
+  border-bottom-right-radius: var(--radius-btn);
+}
+.toolbar-gap { flex: 1; }
+
+/* — toolbar buttons, drawn 50% larger —
+   Scoped to .btn-toolbar so the same .btn class stays at its measured size
+   everywhere else: the settings forms, the admin panel, the message-body
+   notice bars and the auth cards all use .btn and none of them are being
+   scaled. The gap between buttons grows too, or a bigger button row reads as
+   more cramped than the small one it replaced. */
+.btn-toolbar, .compose-toolbar { gap: calc(6px * var(--toolbar-scale)); }
+.btn-toolbar .btn, .compose-toolbar .btn {
+  height: calc(28px * var(--toolbar-scale));
+  padding: 0 calc(9px * var(--toolbar-scale));
+  gap: calc(6px * var(--toolbar-scale));
+  font-size: calc(14px * var(--toolbar-scale));
+  line-height: calc(28px * var(--toolbar-scale));
+  border-radius: calc(var(--radius-btn) * var(--toolbar-scale));
+}
+/* The group's shared inner borders have to be re-squared at the new radius,
+   or the first and last buttons round on the inside edge as well. */
+.btn-toolbar .btn-group > .btn,
+.btn-toolbar .btn-group > .menu > .btn { border-radius: 0; }
+.btn-toolbar .btn-group > *:first-child > .btn,
+.btn-toolbar .btn-group > .btn:first-child {
+  border-top-left-radius: calc(var(--radius-btn) * var(--toolbar-scale));
+  border-bottom-left-radius: calc(var(--radius-btn) * var(--toolbar-scale));
+}
+.btn-toolbar .btn-group > *:last-child > .btn,
+.btn-toolbar .btn-group > .btn:last-child {
+  border-top-right-radius: calc(var(--radius-btn) * var(--toolbar-scale));
+  border-bottom-right-radius: calc(var(--radius-btn) * var(--toolbar-scale));
+}
+
+/* — icons —
+   Inline SVG from the `icon` template function (views.go). Sized in em so an
+   icon follows whatever font-size its button was given -- that is what makes
+   the toolbar scale above reach the icons without naming them again.
+   `currentColor` in the markup means colour follows the button's text colour,
+   so an icon on the dark compose toolbar or inside a green primary button
+   needs no second rule. */
+/* The size and layout only. The mask that draws the shape, and the
+   background-color that paints through it, are generated into icons.css from
+   internal/icons -- see cmd/iconcss for why they are not inline SVG any
+   more. */
+.icon {
+  width: 1.15em; height: 1.15em;
+  flex: none; display: block;
+}
+/* Deliberately NOT vector-effect: non-scaling-stroke. That pins the stroke to
+   screen pixels, so a scaled-up icon keeps a hairline outline -- which is
+   most of what made the glyphs these replaced hard to see. The default
+   behaviour is wanted here: the 1.9 units of stroke are in the 24-unit
+   viewBox, so the line thickens with the icon. */
+/* .drop-icon lives with the menus, further down. */
+
+/* — dropdown menus —
+   Native <details>, so they open, close and announce themselves without
+   script; app.js only adds close-on-outside-click. */
+.menu { position: relative; display: inline-block; }
+.menu > summary { list-style: none; }
+.menu > summary::-webkit-details-marker { display: none; }
+/* Menu contents are sized up from the app's 14px, via --menu-scale.
+   A toolbar button is recognised by its position and its icon; a menu entry is
+   *read* -- "Mark the whole folder read" is a sentence, and its icon is a hint
+   beside it rather than the label. So the text, the icon and the row height
+   all matter more here than on the button that opened it. */
+.drop-menu, .acct-menu { --menu-scale: 1.15; }
+.drop-menu {
+  position: absolute; z-index: 50; top: calc(100% + 3px); left: 0;
+  margin: 0; padding: 5px 0; min-width: 250px; max-height: 70vh; overflow-y: auto;
+  list-style: none;
+  background: #fff; color: var(--c-text);
+  border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+}
+.drop-menu.right-edge { left: auto; right: 0; }
+.drop-menu li { margin: 0; }
+.drop-item {
+  display: flex; align-items: center;
+  gap: calc(8px * var(--menu-scale));
+  width: 100%;
+  padding: calc(6px * var(--menu-scale)) calc(12px * var(--menu-scale));
+  border: 0; background: none; box-shadow: none;
+  font-size: calc(14px * var(--menu-scale)); font-family: var(--font);
+  color: inherit; text-align: left;
+  text-decoration: none; cursor: pointer; white-space: nowrap;
+}
+/* The hover text was #eee on the slate -- a light grey on a mid grey. White
+   is the readable one, and :focus-visible gets it too so the keyboard sees
+   what the mouse sees. */
+.drop-item:hover, .drop-item:focus-visible { background: var(--c-menu-hover); color: #fff; }
+.drop-item[aria-current="true"] { font-weight: 700; }
+.drop-icon {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: calc(18px * var(--menu-scale));
+  /* Full strength. These sat at .8, which on a one-weight stroke icon is the
+     difference between an icon and a smudge. */
+  opacity: 1;
+  /* The folder glyphs beside a "move to" entry are still text rather than
+     SVG, so the size has to be set on the span as well as on .icon below. */
+  font-size: calc(15px * var(--menu-scale));
+}
+.drop-icon .icon {
+  width: calc(17px * var(--menu-scale)); height: calc(17px * var(--menu-scale));
+}
+.drop-sep { border-top: 1px solid var(--c-divider); margin-top: 5px; padding-top: 5px; }
+
+/* — sidebar —
+   No card: the folder list sits directly on the ground, in white, exactly as
+   the original does. */
+.sidebar {
+  display: flex; flex-direction: column; min-height: 0;
+  color: var(--c-sidebar-text);
+  padding-left: var(--gap);
+}
+.acct { height: var(--h-toolbar); display: flex; align-items: center; }
+.acct-details { width: 100%; }
+.acct-btn {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  background: transparent; border: 1px solid transparent;
+  color: #fff; font: inherit; cursor: pointer;
+  padding: 4px 6px; border-radius: var(--radius-btn); text-align: left;
+}
+.acct-btn:hover { background: rgba(0, 0, 0, .28); }
+.acct-details[open] .acct-btn { background: rgba(0, 0, 0, .4); }
+.acct-avatar {
+  flex: none; width: 26px; height: 26px; border-radius: var(--radius-btn);
+  background: var(--c-accent); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em;
+}
+.acct-name {
+  flex: 1; min-width: 0; font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acct-caret { flex: none; font-size: 10px; opacity: .8; }
+
+.acct-menu {
+  position: absolute; z-index: 40; top: calc(100% + 2px); left: 0;
+  min-width: 250px; padding: 4px 0;
+  background: #fff; color: var(--c-text);
+  border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+}
+.acct-menu form { margin: 0; }
+.acct-item {
+  display: flex; align-items: center;
+  gap: calc(8px * var(--menu-scale));
+  width: 100%;
+  padding: calc(7px * var(--menu-scale)) calc(12px * var(--menu-scale));
+  border: 0; background: none; box-shadow: none;
+  font-family: var(--font); font-size: calc(14px * var(--menu-scale));
+  color: inherit; text-align: left; cursor: pointer;
+  text-decoration: none;
+}
+.acct-item:hover { background: var(--c-menu-hover); color: #eee; }
+/* Scales with the menu it sits in -- these are the ticks and glyphs beside
+   each account. */
+.acct-tick {
+  width: calc(14px * var(--menu-scale)); flex: none; text-align: center;
+  font-size: calc(14px * var(--menu-scale));
+}
+.acct-sep { height: 1px; margin: 4px 0; background: var(--c-divider); }
+
+.compose-bar { padding: 0 0 10px; }
+.btn-compose {
+  width: 100%;
+  background-image: none; background-color: var(--c-accent);
+  border-color: var(--c-accent-dark); color: #fff; font-size: 14px;
+}
+.btn-compose:hover { background-color: var(--c-accent-dark); opacity: 1; }
+
+/* — folders — */
+.folders { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 10px; }
+.folder {
+  display: flex; align-items: center; gap: 8px;
+  text-decoration: none;
+  width: 100%; min-height: 34px; padding-right: 6px;
+  border: 1px solid transparent; border-radius: var(--radius-btn);
+  background: transparent; color: var(--c-sidebar-text);
+  font: 14px var(--font); text-align: left; cursor: pointer;
+}
+.folder:hover { background: var(--c-sidebar-hover); }
+.folder[aria-current="true"] { background: var(--c-sidebar-sel); font-weight: 600; }
+/* 18px rather than 12: these are text glyphs, not icons from the set, and at
+   12 they were smaller than the name beside them. The width is fixed so every
+   name starts on the same vertical line whatever glyph is above it, and
+   line-height: 1 keeps the taller glyph inside the row's 34px -- without it
+   the line box grows and the folder list spreads out. */
+.folder-icon {
+  flex: none; width: 22px; opacity: .85;
+  font-size: 18px; line-height: 1; text-align: center;
+}
+.folder-name {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.folder-count {
+  flex: none; font-size: 11px; padding: 1px 5px; border-radius: 11px;
+  background: #999; color: #fff;
+}
+.folders-empty { color: rgba(255, 255, 255, .7); }
+/* Stacked, full-width, and the same metrics as .btn-compose at the top of the
+   column -- these are sidebar buttons, not toolbar ones, so they deliberately
+   do not pick up --toolbar-scale. */
+.sidebar-foot {
+  height: auto; padding: 8px 0 0;
+  display: flex; flex-direction: column; gap: 4px;
+  border-top: 1px solid rgba(0, 0, 0, .25);
+}
+.btn-sidebar {
+  width: 100%;
+  background-image: none; background-color: var(--c-navy);
+  border-color: var(--c-navy-dark); color: #fff; font-size: 14px;
+}
+.btn-sidebar:hover { background-color: var(--c-navy-dark); }
+/* Sign-out is a form, because ending a session has to be a POST. display:
+   contents hands the button straight to the column's flex layout, so it sits
+   in the same 4px rhythm as the links either side rather than inside a wrapper
+   of its own. */
+.sidebar-foot form { display: contents; }
+/* The checkbox that opens the dialog is off-screen, so its focus ring would be
+   too. The button it drives wears it instead. */
+[data-folder-dialog]:focus-visible ~ .sidebar-foot label[for="new-folder"] {
+  outline: 2px solid #fff; outline-offset: 1px;
+}
+
+/* — modal dialogs —
+   Opened by a checkbox with no script, the same mechanism as the composer's
+   full-screen switch. The checkbox is .sr-only, so it is positioned out of
+   the flow and the sibling combinator below still reaches the modal. */
+.modal {
+  display: none;
+  position: fixed; inset: 0; z-index: 80;
+  align-items: center; justify-content: center; padding: 24px;
+}
+[data-folder-dialog]:checked ~ .modal { display: flex; }
+/* ADJACENT, not general. `~` matches every later sibling, so a row carrying an
+   edit dialog and a delete dialog opened both from either button -- the second
+   drawn on top of the first. `+` reaches only the dialog that follows its own
+   checkbox, which is why the markup is label, checkbox, dialog.
+   data-folder-dialog above keeps `~`: it has one dialog and its checkbox is
+   not adjacent to it. */
+[data-dialog]:checked + .modal { display: flex; }
+.modal-scrim { position: absolute; inset: 0; background: rgba(0, 0, 0, .45); cursor: default; }
+.modal-card {
+  position: relative;           /* above the scrim, so clicks inside stay inside */
+  width: 100%; max-width: 420px; padding: 20px;
+  /* The sidebar sets white text on itself and this is drawn inside it, so the
+     card has to say what colour its own text is. */
+  color: var(--c-text);
+  background: #fff; border-radius: 7px;
+  box-shadow: 0 6px 26px rgba(0, 0, 0, .5);
+}
+/* The card is sometimes a <form>, and a dialog on the mailbox list sits inside
+   the table -- where `.admin-table form { display: contents }` exists so that a
+   form wrapping one button in a cell adds no box. That rule ate the card: the
+   form box vanished and its heading, text and buttons became flex children of
+   the full-width overlay, spread from one edge of the window to the other.
+   Said with two classes so it outranks it. */
+.modal .modal-card {
+  display: block;
+  /* Reset what the CELL sets. `.admin-table .right` is text-align:right plus
+     white-space:nowrap so a row's buttons stay on one line -- both inherit
+     into the dialog drawn inside that cell, which right-aligned its heading
+     and stopped its paragraph wrapping, so the text ran off the card. A modal
+     is not part of the cell it is written in; only the checkbox has to be. */
+  text-align: left; white-space: normal;
+}
+.modal-card h2 { margin: 0 0 14px; font-size: 18px; }
+.modal-actions { display: flex; gap: 8px; margin-top: 18px; }
+.modal-actions .btn { min-width: 84px; }
+
+/* — message list —
+   The button toolbar is on the slate; .list-form is the white card under it,
+   and the search row is the card's own grey header. */
+.list-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.list-toolbar { flex-wrap: wrap; padding: 10px 1px; }
+
+.list-form {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.list-header {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 10px 8px 10px 11px;
+  background: var(--c-toolbar-bg); border-bottom: 1px solid #bbb;
+}
+.list-header input[type=search] {
+  flex: 1; min-width: 0; height: 30px; padding: 0 8px;
+  font: 14px var(--font); color: var(--c-text);
+  background: #fff; border: 1px solid var(--c-border);
+  border-radius: var(--radius-btn);
+}
+/* The search controls belong to a GET form that is a sibling of the POST form
+   around the list -- forms cannot nest, and the checkboxes have to be inside
+   the POST one. The `form=` attribute is what lets the two live in the same
+   row of the layout. */
+.list-stack { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+#list-search { display: none; }
+.list-note {
+  margin: 0; padding: 6px 10px; font-size: 12px; color: var(--c-text-dim);
+  background: #fbfbfb; border-bottom: 1px solid var(--c-divider);
+}
+.list { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* A row is the checkbox plus the link. The 6px transparent left border is the
+   original's selection marker: it colours in rather than shifting the text. */
+.msg-row {
+  display: flex; align-items: stretch; min-height: 46px;
+  border-bottom: 1px solid var(--c-divider);
+  border-left: 6px solid transparent;
+}
+/* Unread is the amber wash plus an orange left edge, which is the original's
+   most recognisable single detail -- bold text alone reads as "slightly
+   different", where this reads as a row you have not dealt with. */
+.msg-row.unread { background: rgba(255, 255, 64, .15); border-left-color: #ffa500; }
+.msg-row:hover { background: var(--c-hover); }
+.msg-row.unread:hover { background: rgba(255, 235, 64, .28); }
+/* The open row has its own blue, darker than --c-selected. That variable is
+   also the "on" state of a toolbar button and of the settings menu, where the
+   tint sits inside a small control against a white card and a light wash is
+   enough; here it has to read as a selected row across the width of the list,
+   next to the amber of the unread ones, and at that size a pale blue is hard
+   to see at all on some monitors. */
+.msg-row.is-open { background: var(--c-row-open); border-left-color: #6a9bcd; }
+.msg-row.unread.is-open { background: var(--c-row-open); border-left-color: #ffa500; }
+.msg-check { flex: none; margin: 0 6px 0 8px; align-self: center; }
+.msg {
+  flex: 1; min-width: 0;
+  display: block; color: inherit; text-decoration: none;
+  padding: 6px 10px 6px 2px; font: inherit;
+}
+.msg-line { display: flex; align-items: baseline; gap: 8px; }
+.msg-from {
+  flex: 1; min-width: 0; font-size: 12.6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.msg-date { flex: none; font-size: 11px; color: var(--c-text-dim); }
+.msg-subject {
+  font-size: 12.6px; color: var(--c-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.msg-meta { flex: none; display: flex; align-items: center; gap: 5px; font-size: 11px; }
+.msg-size { color: var(--c-text-dim); }
+.msg-row.unread .msg-from, .msg-row.unread .msg-subject { font-weight: 700; }
+.msg .flagged { color: #e0a800; }
+.msg .attach { color: var(--c-text-dim); }
+
+.list-foot {
+  flex: none; display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 6px 10px;
+  background: var(--c-toolbar-bg); border-top: 1px solid var(--c-border-soft);
+  font-size: 12px; color: var(--c-text-dim);
+}
+.paginator { display: flex; align-items: center; gap: 4px; }
+.page-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; padding: 0 5px;
+  background: #fff; border: 1px solid var(--c-border-soft);
+  border-radius: var(--radius-btn);
+  color: var(--c-text); text-decoration: none; font-size: 12px;
+}
+.page-btn:hover { background: var(--c-hover); }
+.page-at { padding: 0 4px; }
+.empty { padding: 28px 16px; text-align: center; color: var(--c-text-dim); font-size: 13px; }
+
+/* — reader — */
+.view-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.view-toolbar { flex-wrap: wrap; }
+.view-card {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.view-head { flex: none; padding: 12px 16px; border-bottom: 1px solid var(--c-divider); }
+.view-subject { margin: 0 0 4px; font-size: 17px; font-weight: 700; line-height: 1.25; }
+.view-from { font-size: 13px; }
+.view-meta { margin-top: 4px; font-size: 12px; color: var(--c-text-dim); }
+
+/* The view ladder: a segmented control, so the four rungs read as one
+   question with four answers rather than four unrelated buttons. */
+.view-modes {
+  flex: none; display: flex; align-items: center; gap: 0; flex-wrap: wrap;
+  padding: 7px 16px; background: #fafafa;
+  border-bottom: 1px solid var(--c-divider); font-size: 12px;
+}
+.view-modes-label { color: var(--c-text-dim); margin-right: 8px; }
+
+/* The sidebar toggle. Absent on a wide window -- the sidebar is always there,
+   so a control to reveal it would do nothing -- and turned on inside the
+   narrow media query. */
+.sidebar-toggle {
+  display: none; align-items: center; justify-content: center;
+  flex: none; width: 34px; height: 34px; margin-right: 6px;
+  border: 1px solid transparent; border-radius: var(--radius-btn);
+  color: var(--c-sidebar-text); cursor: pointer;
+}
+.sidebar-toggle:hover { background: var(--c-sidebar-hover); }
+#sidebar-toggle:focus-visible ~ #sidebar .sidebar-toggle,
+#sidebar-toggle:focus-visible + #sidebar .sidebar-toggle {
+  outline: 2px solid #fff; outline-offset: 1px;
+}
+#sidebar-toggle:checked ~ #sidebar .sidebar-toggle { background: var(--c-sidebar-sel); }
+/* The note beside the ladder: what the plain rung is not showing. Pushed to
+   the far end so it never crowds the buttons, and allowed to drop onto its own
+   line on a narrow pane -- .view-modes already wraps. */
+.view-modes-note {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-left: auto; padding-left: 12px;
+  color: var(--c-text-dim);
+}
+.view-modes-note .icon { width: 14px; height: 14px; flex: none; }
+.seg {
+  display: inline-block; padding: 3px 10px;
+  background: #fff; color: var(--c-text); text-decoration: none;
+  border: 1px solid var(--c-border-soft); margin-left: -1px;
+  font-size: 12px; line-height: 1.6;
+}
+.seg:first-of-type { border-radius: var(--radius-btn) 0 0 var(--radius-btn); margin-left: 0; }
+.seg:last-of-type { border-radius: 0 var(--radius-btn) var(--radius-btn) 0; }
+.seg:hover { background: var(--c-hover); }
+.seg.is-on {
+  background: var(--c-chrome); border-color: var(--c-chrome); color: #fff;
+  font-weight: 600; position: relative; z-index: 1;
+}
+
+.view-body { flex: 1; min-height: 0; }
+.view-body iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+
+.notice-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 7px 16px; background: #fff8e1;
+  border-bottom: 1px solid #f0e0b0; font-size: 12.5px;
+}
+.notice-bar.notice-quiet { background: #f4f6f8; border-bottom-color: #dde3e8; }
+.notice-aside { color: #7a6a3a; }
+.notice-quiet .notice-aside { color: var(--c-text-dim); }
+
+/* — what the PGP wrapper turned out to mean —
+   Three appearances for three states, and the default (neither class) is the
+   amber notice-bar above: a signature nobody here could check is a fact worth
+   stating, not a success and not an alarm.
+
+   Green for verified, red for a signature that was checked and did not hold.
+   The red one is the reason this is coloured at all -- that message is
+   readable and untrustworthy at the same time, and it must not look like the
+   other two. Colour is not the only signal: each state's sentence says which
+   it is, so this still reads correctly to somebody who cannot tell the two
+   hues apart. */
+.pgp-bar { background: #fff8e1; border-bottom-color: #f0e0b0; }
+.pgp-bar.pgp-ok { background: #eaf5ea; border-bottom-color: #cfe4cf; color: #1f5c2e; }
+.pgp-bar.pgp-bad { background: #fdecea; border-bottom-color: #f5c6c2; color: #8a2018; }
+.pgp-mark { display: inline-flex; align-items: center; }
+.pgp-mark .icon { width: 16px; height: 16px; }
+.pgp-bar.pgp-bad .pgp-mark { color: #c0392b; }
+
+.attachments {
+  flex: none; display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 8px 16px; border-top: 1px solid var(--c-divider);
+}
+.attachment {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 9px; font-size: 12px; color: inherit; text-decoration: none;
+  background: #f6f6f6; border: 1px solid var(--c-border-soft);
+  border-radius: var(--radius-btn);
+}
+.attachment:hover { background: var(--c-hover); }
+.attachment-size { color: var(--c-text-dim); }
+
+.placeholder {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 24px; color: #999; font-size: 19px; text-align: center;
+}
+
+/* — the composer —
+   Docked in the reading pane by default: it is a card in the third column,
+   the same shape as .view-card, so the folder list and the message list stay
+   where they were and a reply does not hide the message it is replying to.
+   The full-screen state below is the old behaviour, now opt-in. */
+.compose {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border); border-radius: var(--radius);
+  overflow: hidden;
+}
+
+/* Full screen. `:has()` rather than a class toggled by script, so the switch
+   is a checkbox and works with scripting off -- the composer is the one screen
+   in the app where losing a control means losing typed text.
+   position: fixed takes it out of the .app grid entirely, which is what lets
+   it cover the sidebar and the list rather than just its own column. */
+.compose:has(> [data-compose-full]:checked) {
+  position: fixed; inset: 0; z-index: 60;
+  border: 0; border-radius: 0;
+}
+/* Which of the two icons in the toggle is showing. Both are in the markup and
+   one is hidden, so the swap costs no request and no script. */
+.compose .when-full { display: none; }
+.compose:has(> [data-compose-full]:checked) .when-docked { display: none; }
+.compose:has(> [data-compose-full]:checked) .when-full { display: inline-flex; }
+.compose-full-btn { cursor: pointer; }
+/* The checkbox is off-screen, so its focus ring would be too. The label wears
+   it instead -- otherwise this control is invisible to keyboard users. */
+.compose:has(> [data-compose-full]:focus-visible) .compose-full-btn {
+  outline: 2px solid #fff; outline-offset: 1px;
+}
+/* The composer's toolbar **wraps**, and it has to.
+   It carries Send, the format switch, Save draft, Draft with Ollama, the
+   full-screen toggle and Close -- about 890px of controls at the toolbar
+   scale. Docked in the reading pane it has roughly 670px. With nowrap and a
+   fixed height the overflow was simply painted outside the bar and clipped by
+   the window: the Ollama button rendered 86px past the right edge, present in
+   the DOM and invisible on screen, which reads as the button not existing.
+   min-height rather than height, or a wrapped second row has nowhere to go. */
+.compose-toolbar {
+  min-height: var(--h-toolbar); flex: none;
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 8px; padding: 6px 10px;
+  background: var(--c-chrome-dark);
+}
+/* The spacer only pushes things apart while there is room to. Once the bar
+   wraps it would otherwise take a whole row to itself and strand the two
+   trailing buttons on a third. */
+.compose-toolbar > .toolbar-spacer { flex: 1 1 0; min-width: 0; }
+.compose-fields { flex: none; padding: 10px 14px; display: grid; gap: 6px; }
+.compose-row { display: flex; align-items: center; gap: 10px; }
+.compose-row > label { flex: none; width: 58px; text-align: right; font-size: 13px; color: var(--c-text-dim); }
+.compose-row > input {
+  flex: 1; min-width: 0; height: 30px; padding: 0 8px;
+  font: 14px var(--font); border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+}
+.compose-body { flex: 1; min-height: 0; padding: 0 14px 14px; display: flex; }
+.compose-body textarea {
+  flex: 1; width: 100%; resize: none; padding: 10px;
+  font: 14px/1.5 var(--font); color: var(--c-text);
+  border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+}
+/* — the attachment strip —
+   Between the fields and the message, which is where a mail client puts it and
+   where somebody checks that the file they meant to send is actually on the
+   message. Hidden while empty rather than sitting there as an empty box. */
+.compose-attachments {
+  flex: none; margin: 0 14px 10px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+}
+.compose-attachments[hidden] { display: none; }
+.attach-list {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin: 0; padding: 0; list-style: none;
+}
+/* One chip per file. max-width so a long filename cannot push the remove
+   button off the pane -- the name ellipsises and carries the whole thing in
+   its title attribute. */
+.attach-item {
+  display: flex; align-items: center; gap: 6px; max-width: 320px;
+  padding: 3px 4px 3px 8px; font-size: 12.5px;
+  background: #f4f6f8; border: 1px solid #dde3e8; border-radius: var(--radius-btn);
+}
+.attach-icon { flex: none; display: flex; color: var(--c-text-dim); }
+.attach-icon .icon { width: 14px; height: 14px; }
+.attach-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach-size { flex: none; color: var(--c-text-dim); }
+.attach-remove {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0;
+  color: var(--c-text-dim); background: none;
+  border: 0; border-radius: var(--radius-btn); cursor: pointer;
+}
+.attach-remove .icon { width: 12px; height: 12px; }
+.attach-remove:hover { color: var(--c-danger); background: rgba(0, 0, 0, .06); }
+.attach-remove:focus-visible { outline: 2px solid var(--c-accent-dark); outline-offset: 1px; }
+.attach-note { color: var(--c-text-dim); font-size: 12.5px; }
+.attach-note.is-error { color: var(--c-danger); }
+
+/* Attach, in the main toolbar. The same arrangement as .rte-file: the input is
+   invisible and focusable, the label is what is seen. */
+.compose-attach { position: relative; overflow: hidden; }
+.compose-attach input[type=file] {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; cursor: pointer;
+}
+.compose-attach:focus-within { outline: 2px solid var(--c-accent-dark); outline-offset: -1px; }
+
+/* — the Ollama assist bar — */
+.assist-bar {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 14px 10px; padding: 8px 11px;
+  background: #f4f6f8; border: 1px solid #dde3e8; border-radius: var(--radius-btn);
+  font-size: 13px;
+}
+.assist-bar[hidden] { display: none; }
+.assist-bar label { flex: none; color: var(--c-text-dim); white-space: nowrap; }
+.assist-bar input[type=text] {
+  flex: 1; min-width: 0; height: 30px; padding: 0 8px;
+  font-size: 14px; font-family: var(--font);
+  border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+}
+.assist-note { flex: none; color: var(--c-text-dim); white-space: nowrap; }
+.assist-note.is-error { color: var(--c-danger); }
+.hint-error { color: var(--c-danger); }
+
+.compose-note {
+  margin: 0 14px 10px; padding: 7px 11px; font-size: 12.5px;
+  background: #f4f6f8; border: 1px solid #dde3e8; border-radius: var(--radius-btn);
+}
+/* Both bodies live in the document at once and one of them is [hidden]. The
+   UA sheet's `[hidden] { display: none }` loses to .compose-body's own
+   display: flex on specificity, so hiding has to be said here or the two
+   bodies stack. */
+.compose-body[hidden] { display: none; }
+
+/* — the format switch — */
+.compose-format {
+  display: flex; align-items: center; gap: 2px;
+  margin: 0 0 0 6px; padding: 2px; border: 0;
+  background: rgba(0, 0, 0, .22); border-radius: var(--radius-btn);
+}
+/* Scaled with the toolbar it sits in, so the switch does not look like a
+   leftover beside the larger buttons either side of it. */
+.format-opt {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 calc(9px * var(--toolbar-scale));
+  height: calc(24px * var(--toolbar-scale));
+  border-radius: 2px;
+  font-size: calc(12px * var(--toolbar-scale));
+  color: #d8dde2; cursor: pointer; white-space: nowrap;
+}
+.format-opt:hover { color: #fff; }
+/* :has() so the whole label lights up, not just the dot -- the label is the
+   click target, so it should be the thing that looks selected. Browsers
+   without :has() get the radio and the text and lose only the highlight. */
+.compose-format label:has(input:checked) { background: var(--c-accent); color: #fff; }
+.format-opt input { margin: 0; accent-color: var(--c-accent-dark); }
+.format-opt:focus-within { outline: 2px solid #fff; outline-offset: -1px; }
+
+/* — one time password —
+   QR beside the detail while there is room, stacked when there is not. The QR
+   has a white plate of its own rather than inheriting the card: a scanner
+   needs the quiet zone around the symbol to be light, and a dark theme that
+   tinted it would make the code unreadable by camera. */
+.totp-setup {
+  display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start;
+  margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--c-divider);
+}
+.totp-qr {
+  flex: none; padding: 10px; background: #fff;
+  border: 1px solid var(--c-border-soft); border-radius: var(--radius);
+}
+.totp-qr img { display: block; width: 240px; height: 240px; }
+.totp-detail { flex: 1 1 320px; min-width: 280px; }
+/* Both of these are read off the screen and typed elsewhere, so they are set
+   large with generous letter-spacing -- the failure they prevent is a
+   misread 0/O or 1/l in a string that gives no clue it was misread. */
+.totp-secret {
+  font-size: 16px; letter-spacing: .08em; word-break: break-all;
+  padding: 8px 10px; background: var(--c-hover);
+  border: 1px solid var(--c-border-soft); border-radius: var(--radius-btn);
+}
+.totp-code {
+  display: inline-block; font-size: 30px; letter-spacing: .22em;
+  padding: 6px 14px; color: var(--c-navy);
+  background: var(--c-hover);
+  border: 1px solid var(--c-border-soft); border-radius: var(--radius-btn);
+}
+.totp-uri { word-break: break-all; font-size: 12px; }
+
+/* — the key generator, on the PGP settings screen —
+   Button and passphrase on one line, the note beneath both. The passphrase is
+   as wide as it is because a good one is long, and a box that shows eight
+   characters encourages one that is eight characters. */
+.generate-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.generate-row .hint { flex-basis: 100%; margin: 0; }
+/* The sizing lives on whichever element is the flex item. Every password
+   input on the page gets wrapped in a .pw-wrap with a Show button (app.js), so
+   after that runs the wrapper is the child of this row and the input is inside
+   it -- size only the input and the row collapses. */
+.gen-pass, .generate-row .pw-wrap { flex: 1 1 260px; min-width: 200px; max-width: 420px; }
+.generate-row .pw-wrap .gen-pass { flex: none; width: 100%; max-width: none; }
+.generate-row .icon { width: 15px; height: 15px; }
+
+/* — signing and encrypting —
+   The same chassis as the format switch, because they are the same kind of
+   control in the same bar. The lit colour is the one difference and it is
+   deliberate: green is this app's "chosen option", and a message being
+   encrypted is a state worth reading at a glance rather than a preference. */
+.compose-pgp {
+  display: flex; align-items: center; gap: 2px;
+  margin: 0 0 0 6px; padding: 2px; border: 0;
+  background: rgba(0, 0, 0, .22); border-radius: var(--radius-btn);
+}
+.compose-pgp label:has(input:checked) { background: var(--c-navy); color: #fff; }
+.compose-pgp .icon {
+  width: calc(13px * var(--toolbar-scale));
+  height: calc(13px * var(--toolbar-scale));
+}
+/* Only visible once there is something to unlock. A passphrase box on every
+   composer is a box people type into for no reason. */
+.pgp-pass {
+  height: calc(24px * var(--toolbar-scale));
+  min-width: 190px; margin-left: 6px; padding: 0 8px;
+  font-size: calc(12px * var(--toolbar-scale));
+  border: 1px solid rgba(255, 255, 255, .25); border-radius: var(--radius-btn);
+  background: rgba(0, 0, 0, .22); color: #fff;
+}
+.pgp-pass::placeholder { color: #9aa4ae; }
+.pgp-pass[hidden] { display: none; }
+
+/* — the rich-text editor — */
+.compose-html { flex-direction: column; gap: 8px; }
+/* The editor's controls are 10% larger than their original measurements, via
+   --rte-scale on the toolbar. Its own number rather than --toolbar-scale: this
+   is a dense strip of about sixteen controls sitting inside the composer card,
+   not the six-button row across the top of the window, and at 1.5x it would
+   wrap onto three lines in the docked pane. */
+.rte-toolbar {
+  --rte-scale: 1.1;
+  flex: none; display: flex; flex-direction: column; align-items: flex-start;
+  /* The two rows read as one control surface, so the space between them is
+     smaller than the space between groups within a row. Any more and they
+     separate into two toolbars that happen to be stacked. */
+  gap: calc(2px * var(--rte-scale));
+  padding: calc(5px * var(--rte-scale)); background: var(--c-toolbar-bg);
+  border: 1px solid var(--c-border-soft); border-radius: var(--radius-btn);
+}
+/* A row is fixed, not the result of wrapping -- see the note in compose.html.
+   flex-wrap stays on as the last resort for a very narrow window: a row that
+   cannot fit should wrap rather than clip its last button. */
+.rte-row {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: calc(4px * var(--rte-scale));
+}
+/* The groups are what make a row readable: related buttons stay together
+   rather than running into their neighbours. */
+.rte-group { display: flex; align-items: center; gap: 2px; }
+.rte-group + .rte-group {
+  margin-left: 4px; padding-left: 6px; border-left: 1px solid var(--c-border-soft);
+}
+.rte-btn {
+  min-width: calc(28px * var(--rte-scale));
+  height: calc(26px * var(--rte-scale));
+  padding: 0 calc(6px * var(--rte-scale));
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: calc(13px * var(--rte-scale)); line-height: 1;
+  font-family: var(--font); color: var(--c-text);
+  background: #fff; border: 1px solid transparent;
+  border-radius: var(--radius-btn); cursor: pointer;
+}
+/* Sized against the button rather than left on .icon's 1.15em, so the whole
+   set is one size whatever font-size a control happens to carry -- the colour
+   labels sit at a different size from the plain buttons. */
+.rte-btn .icon, .rte-colour .icon {
+  width: calc(17px * var(--rte-scale));
+  height: calc(17px * var(--rte-scale));
+}
+.rte-btn:hover { background: var(--c-hover); border-color: var(--c-border-soft); }
+.rte-btn:focus-visible { outline: 2px solid var(--c-accent-dark); outline-offset: -1px; }
+.rte-btn.is-on {
+  background: var(--c-selected); border-color: #a8c7e4; color: #24557d;
+}
+.rte-select {
+  height: calc(26px * var(--rte-scale));
+  padding: 0 calc(4px * var(--rte-scale));
+  font-size: calc(12px * var(--rte-scale)); font-family: var(--font);
+  color: var(--c-text);
+  background: #fff; border: 1px solid var(--c-border-soft);
+  border-radius: var(--radius-btn); cursor: pointer;
+}
+/* The native colour input is a fixed-size swatch in most browsers and an
+   awkward one, so it is sized down and captioned by the letter beside it. */
+.rte-colour {
+  display: inline-flex; align-items: center;
+  gap: calc(3px * var(--rte-scale));
+  height: calc(26px * var(--rte-scale));
+  padding: 0 calc(5px * var(--rte-scale));
+  background: #fff; border: 1px solid transparent;
+  border-radius: var(--radius-btn); cursor: pointer;
+  font-size: calc(13px * var(--rte-scale));
+}
+.rte-colour:hover { background: var(--c-hover); border-color: var(--c-border-soft); }
+.rte-colour input {
+  width: calc(22px * var(--rte-scale)); height: calc(18px * var(--rte-scale));
+  padding: 0; border: 0; background: none; cursor: pointer;
+}
+
+/* The file input is the real control and is invisible; the label around it is
+   what the toolbar shows. Not display:none -- a hidden input is not focusable,
+   and this one is the tab stop for Insert image. */
+.rte-file { position: relative; overflow: hidden; }
+.rte-file input {
+  position: absolute; inset: 0; opacity: 0; cursor: pointer;
+  /* A file input is wider than its button; this keeps the clickable area the
+     size of the toolbar button rather than spilling over its neighbours. */
+  width: 100%; height: 100%;
+}
+.rte-file:focus-within { outline: 2px solid var(--c-accent-dark); outline-offset: -1px; }
+
+/* The image row, revealed when a picture in the message is selected. */
+.rte-image-row { width: 100%; }
+.rte-label {
+  font-size: calc(12px * var(--rte-scale)); color: var(--c-text-dim);
+  white-space: nowrap;
+}
+.rte-note { font-size: calc(12px * var(--rte-scale)); color: var(--c-text-dim); }
+.rte-note.is-error { color: var(--c-danger); }
+.rte-image-row[hidden] { display: none; }
+/* The selected picture, so "these buttons act on that one" is visible. */
+.rte-surface img.is-selected { outline: 2px solid var(--c-accent-dark); outline-offset: 2px; }
+
+.rte-linkbar {
+  flex: none; display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; font-size: 12.5px;
+  background: #f4f6f8; border: 1px solid #dde3e8; border-radius: var(--radius-btn);
+}
+.rte-linkbar[hidden] { display: none; }
+.rte-linkbar input {
+  flex: 1; min-width: 0; height: 28px; padding: 0 8px;
+  font: 13px var(--font); border: 1px solid var(--c-border);
+  border-radius: var(--radius-btn);
+}
+
+/* The editing surface. It deliberately looks like the plain textarea it
+   replaces -- same border, same padding, same metrics -- because it is the
+   same field in a different mode, not a different feature. */
+.rte-surface {
+  flex: 1; min-height: 0; overflow-y: auto; padding: 10px;
+  font: 14px/1.5 var(--font); color: var(--c-text); background: #fff;
+  border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+}
+.rte-surface:focus-visible { outline: 2px solid var(--c-accent-dark); outline-offset: -2px; }
+/* What the editor produces has to be legible while it is being written, and
+   the app's own reset is not what a message body should look like. These are
+   the editing view only -- the recipient's client applies its own. */
+.rte-surface h1 { font-size: 22px; margin: .5em 0 .3em; }
+.rte-surface h2 { font-size: 19px; margin: .5em 0 .3em; }
+.rte-surface h3 { font-size: 16px; margin: .5em 0 .3em; }
+.rte-surface p { margin: 0 0 .6em; }
+.rte-surface ul, .rte-surface ol { margin: 0 0 .6em; padding-left: 1.6em; }
+.rte-surface blockquote {
+  margin: 0 0 .6em; padding: 2px 0 2px 10px;
+  border-left: 3px solid var(--c-border-soft); color: #555;
+}
+.rte-surface pre {
+  margin: 0 0 .6em; padding: 8px; overflow-x: auto;
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: #f4f6f8; border-radius: var(--radius-btn);
+}
+.rte-surface a { color: #2a6496; }
+/* max-width so a page-width picture does not overflow the composer when it is
+   docked in the narrow pane, and `height: auto` so the width attribute the
+   editor writes does not squash it. Note this is the *editing* view only --
+   the width attribute is what travels in the message, and the recipient's
+   client decides the rest. */
+.rte-surface img { max-width: 100%; height: auto; cursor: pointer; }
+.rte-surface table { border-collapse: collapse; }
+.rte-surface td, .rte-surface th { border: 1px solid var(--c-border-soft); padding: 4px 7px; }
+
+/* — auth screens — */
+.auth {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.auth-card {
+  width: 100%; max-width: 380px; padding: 22px;
+  background: #fff; border-radius: 7px; box-shadow: 0 2px 10px rgba(0, 0, 0, .5);
+}
+.auth-card h1 { margin: 0 0 4px; font-size: 21px; }
+.auth-card .lede { margin: 0 0 18px; font-size: 13px; color: var(--c-text-dim); }
+.field { margin-bottom: 12px; }
+.field label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--c-text-dim); }
+.field input, .field select {
+  width: 100%; height: 32px; padding: 0 8px;
+  font: 14px var(--font); color: var(--c-text);
+  background: #fff; border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+}
+/* A tick box is not a text field. Without this every checkbox inside a .field
+   is stretched to the full width and 32px tall, which is why six of them in
+   settings.html carried style="width:auto;height:auto" -- the same declaration
+   .admin-check and .inline-check already make for their own boxes. Said once
+   here, the next checkbox added to a form is right without anyone knowing. */
+.field input[type=checkbox] { width: auto; height: auto; }
+/* Textareas were left out of the rule above and so fell back to the browser's
+   default `cols`, which is about 20 characters -- a signature box the width of
+   a phone number. Height comes from each field's `rows`; the width and the
+   chrome belong here with every other field. */
+.field textarea {
+  width: 100%; padding: 7px 8px; resize: vertical;
+  font-size: 14px; font-family: var(--font); color: var(--c-text);
+  background: #fff; border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+}
+.field .hint { margin-top: 3px; font-size: 11px; color: var(--c-text-dim); }
+
+/* — password reveal — */
+/* The wrapper and the button are built by app.js, never by a template, so
+   with scripting off there is no control at all rather than one that does
+   nothing.
+   This block must stay AFTER `.field input` above: `.pw-wrap input` and
+   `.field input` have identical specificity, so whichever comes last wins,
+   and placed first the padding is silently lost -- which looks fine on an
+   empty field and puts the placeholder underneath the button as soon as
+   there is one. */
+.pw-wrap { position: relative; }
+/* [hidden] loses to the rule above without this: a bare `.pw-wrap` selector is
+   the same specificity as the attribute one and wins on order. The composer's
+   passphrase wrapper is hidden this way. */
+.pw-wrap[hidden] { display: none; }
+.pw-wrap input { padding-right: 52px; }
+.pw-toggle {
+  position: absolute; right: 1px; top: 1px; height: 30px; padding: 0 8px;
+  font: 11px/1 var(--font); letter-spacing: .04em; text-transform: uppercase;
+  color: var(--c-text); background: #fff; border: 0;
+  border-radius: 0 var(--radius-btn) var(--radius-btn) 0; cursor: pointer;
+}
+.pw-toggle:hover { background: var(--c-hover); }
+.pw-toggle:focus-visible { outline: 2px solid var(--c-accent); outline-offset: -2px; }
+/* Edge and IE draw a reveal control of their own inside the field, which
+   would sit beside ours and toggle independently of it. */
+.pw-wrap input::-ms-reveal, .pw-wrap input::-ms-clear { display: none; }
+
+.alert {
+  padding: 9px 11px; margin-bottom: 14px; border-radius: var(--radius-btn); font-size: 13px;
+  background: #fdecea; border: 1px solid #f5c6c2; color: #8c1c13;
+}
+.alert-ok { background: #eaf6e9; border-color: #c3e6c0; color: #1e5620; }
+
+/* — auth screens, scaled up —
+ *
+ * The sign-in, setup and error pages are drawn 50% larger than the rest of the
+ * app. Everything above is the app-wide size; everything here multiplies it by
+ * --auth-scale, so the ratio is one number to change rather than a second set
+ * of measurements to keep in step with the first.
+ *
+ * Scoped to `.auth` rather than done with a font-size on the card, because the
+ * blocks these override -- .field, .btn, .pw-toggle, .alert -- are shared with
+ * the settings and admin screens, which are not being scaled. A transform:
+ * scale() on the card would have been one line and is the wrong tool: it
+ * scales the rendered pixels, so text is resampled rather than re-laid-out and
+ * the result is soft, and the card's layout box keeps its original size so
+ * centring and the viewport edges are computed against a box that is no longer
+ * where the card appears.
+ *
+ * These selectors are one class deeper than the rules they override, so they
+ * win on specificity wherever they land in the file. They are placed here
+ * anyway: `.pw-wrap input` and `.field input` tie, and the reveal button's
+ * padding is only correct while this block comes after both.
+ */
+.auth {
+  --auth-scale: 1.5;
+}
+.auth-card {
+  max-width: calc(380px * var(--auth-scale));
+  padding: calc(22px * var(--auth-scale));
+  border-radius: calc(7px * var(--auth-scale));
+}
+.auth-card h1 {
+  margin: 0 0 calc(4px * var(--auth-scale));
+  font-size: calc(21px * var(--auth-scale));
+}
+.auth-card .lede {
+  margin: 0 0 calc(18px * var(--auth-scale));
+  font-size: calc(13px * var(--auth-scale));
+}
+.auth .field { margin-bottom: calc(12px * var(--auth-scale)); }
+.auth .field label {
+  margin-bottom: calc(4px * var(--auth-scale));
+  font-size: calc(12px * var(--auth-scale));
+}
+/* "if you use one" beside a label, for a field that is genuinely skippable.
+   Lighter and smaller than the label so it reads as an aside rather than as
+   part of the field's name. */
+.field-optional { color: var(--c-text-dim); font-weight: 400; }
+.field-optional::before { content: " — "; }
+
+.auth .field input, .auth .field select {
+  height: calc(32px * var(--auth-scale));
+  padding: 0 calc(8px * var(--auth-scale));
+  font: calc(14px * var(--auth-scale)) var(--font);
+  border-radius: calc(var(--radius-btn) * var(--auth-scale));
+}
+.auth .field .hint {
+  margin-top: calc(3px * var(--auth-scale));
+  font-size: calc(11px * var(--auth-scale));
+}
+.auth .btn {
+  height: calc(28px * var(--auth-scale));
+  padding: 0 calc(9px * var(--auth-scale));
+  gap: calc(6px * var(--auth-scale));
+  font: calc(14px * var(--auth-scale)) / calc(28px * var(--auth-scale)) var(--font);
+  border-radius: calc(var(--radius-btn) * var(--auth-scale));
+}
+.auth .alert {
+  padding: calc(9px * var(--auth-scale)) calc(11px * var(--auth-scale));
+  margin-bottom: calc(14px * var(--auth-scale));
+  font-size: calc(13px * var(--auth-scale));
+  border-radius: calc(var(--radius-btn) * var(--auth-scale));
+}
+/* The reveal button is positioned against the field it sits in, so its height
+   and the padding that keeps text out from under it both have to scale with
+   the field or the caret runs beneath the button. */
+.auth .pw-wrap input { padding-right: calc(52px * var(--auth-scale)); }
+.auth .pw-toggle {
+  height: calc(30px * var(--auth-scale));
+  padding: 0 calc(8px * var(--auth-scale));
+  font: calc(11px * var(--auth-scale)) / 1 var(--font);
+  border-radius: 0 calc(var(--radius-btn) * var(--auth-scale))
+                   calc(var(--radius-btn) * var(--auth-scale)) 0;
+}
+
+/* — settings sections —
+   A menu down the left of the settings card and one screen at a time, the
+   same shape as the admin panel. One long page was fine while Settings meant
+   "your mailboxes"; with folders and preferences on it, one column of
+   everything is a scroll rather than a menu. */
+.settings-frame {
+  display: grid; grid-template-columns: 230px minmax(0, 1fr);
+  gap: 18px; align-items: start;
+}
+.settings-nav { display: flex; flex-direction: column; gap: 2px; }
+.settings-nav-item {
+  display: block; padding: 9px 12px; border-radius: var(--radius-btn);
+  color: var(--c-text); text-decoration: none;
+  border: 1px solid transparent;
+}
+.settings-nav-item:hover { background: var(--c-hover); }
+.settings-nav-item.is-on {
+  background: var(--c-selected); border-color: #a8c7e4; color: #24557d;
+}
+.settings-nav-label { display: block; font-size: 14.5px; font-weight: 600; }
+.settings-nav-desc { display: block; font-size: 12px; color: var(--c-text-dim); }
+.settings-nav-item.is-on .settings-nav-desc { color: #3a6d99; }
+.settings-body { min-width: 0; }
+/* One column once the menu would squeeze the forms. */
+@media (max-width: 900px) {
+  .settings-frame { grid-template-columns: minmax(0, 1fr); }
+  .settings-nav { flex-direction: row; flex-wrap: wrap; }
+  .settings-nav-desc { display: none; }
+}
+
+/* — the folder manager — */
+/* The table scrolls inside its own card rather than widening the page: a
+   horizontal scrollbar on the window is the wrong place for one row of
+   buttons being 30px too wide. */
+.folder-table-wrap { overflow-x: auto; }
+.folder-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.folder-table th, .folder-table td {
+  padding: 7px 8px; text-align: left; border-bottom: 1px solid var(--c-divider);
+  vertical-align: middle;
+}
+.folder-table th {
+  font-size: 12px; color: var(--c-text-dim); font-weight: 600;
+  border-bottom: 1px solid var(--c-border-soft);
+}
+.folder-table .num { text-align: right; }
+/* The nesting is shown the same way the sidebar shows it, so a folder is in
+   the same visual place on both screens. */
+.folder-table td:first-child { display: flex; align-items: center; gap: 6px; }
+.folder-indent { flex: none; }
+.folder-actions { white-space: nowrap; text-align: right; }
+/* Several small forms live in one table cell -- they cannot be one form,
+   because each posts to a different route. */
+.inline-form { display: inline-flex; align-items: center; gap: 4px; margin: 0; }
+.rename-input {
+  width: 130px; height: 26px; padding: 0 6px;
+  font-size: 13px; font-family: var(--font);
+  border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+}
+.folder-table .btn { height: 26px; font-size: 13px; padding: 0 8px; line-height: 24px; }
+
+/* — settings — */
+/* Margin rather than a grid gap: the sidebar's own top row is the account
+   switcher, so a settings pane flush with the viewport edge sits a toolbar's
+   height higher than everything beside it. */
+/* — the settings screen —
+   A page of its own rather than a pane in the three-column frame. The header
+   is fixed at the top and the body scrolls under it, so Close settings is
+   reachable without scrolling back up a long folder list. */
+.settings-screen {
+  display: flex; flex-direction: column;
+  height: 100vh; overflow: hidden;
+}
+.settings-head {
+  flex: none; display: flex; align-items: center; gap: 12px;
+  height: var(--h-toolbar); padding: 0 16px;
+  background: var(--c-chrome-dark); color: #fff;
+}
+.settings-head h1 { margin: 0; font-size: 19px; font-weight: 600; }
+.settings-head-gap { flex: 1; }
+.settings-close { height: 34px; font-size: 14px; line-height: 32px; }
+.settings-pane {
+  flex: 1; min-height: 0;
+  overflow-y: auto; background: #f4f5f6;
+}
+/* 720px was right while Settings was one column of forms. The section menu
+   takes 230px of that plus its gap, leaving the forms about 430px -- which is
+   what made the folder table overflow and the wider fields look cut off. The
+   pane itself is the list column plus the reading pane, so there is room. */
+.settings-inner { max-width: 1040px; margin: 0 auto; padding: 22px 18px 40px; }
+.settings-inner h1 { margin: 0 0 16px; font-size: 21px; }
+.card {
+  background: #fff; border: 1px solid var(--c-divider);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+}
+.card h2 { margin: 0 0 12px; font-size: 15px; }
+.acct-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 0; border-bottom: 1px solid var(--c-divider);
+}
+.acct-row:last-child { border-bottom: 0; }
+.acct-row .grow { flex: 1; min-width: 0; }
+.acct-row .sub { font-size: 12px; color: var(--c-text-dim); }
+.badge {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  padding: 2px 6px; border-radius: 8px; background: var(--c-selected); color: #24557d;
+}
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* The three-pane layout needs 1180px, and the number is arithmetic rather
+   than taste.
+
+   Two of the three columns are fixed -- 200px of sidebar and 420px of message
+   list -- so the reading pane is whatever is left: the window minus 644 once
+   the gaps and padding are counted. At the old 900px breakpoint that gave the
+   reader 256px, which made the message being read the NARROWEST thing on
+   screen, narrower than the list of messages you are not reading. Below about
+   1064px the list is wider than the reader, which is the wrong way round for
+   a mail client.
+
+   1180 gives the reader 536px. It is still not enough for the reader's own
+   toolbar to fit on one row -- that wants 705px of buttons at the current
+   --toolbar-scale, so a single row needs about 1350px -- but the toolbar wraps
+   downward now rather than over the message (see .btn-toolbar), and 536px is
+   a column somebody can actually read a message in.
+
+   Below this, one column: the sidebar, then the list, then the reader, each
+   full width. That is a better answer than three cramped ones. */
+@media (max-width: 1180px) {
+  .app {
+    grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr);
+    padding: 0 var(--gap) var(--gap);
+  }
+  .sidebar { max-height: 40vh; padding-left: 0; }
+
+  /* ONE PANE AT A TIME, rather than three stacked.
+
+     Stacking was the obvious thing and it is wrong: opening a message left it
+     below the folder list and the whole message list, so reading meant
+     scrolling past everything you were not reading. SnappyMail does not stack
+     either -- with no preview-pane mode set it hides the list while a message
+     is open and shows it again when one is not, driven by a single class. This
+     is the same idea, decided from the markup rather than from a class the
+     server has to remember to set.
+
+     :has(.view-head) means "a message is open": .view-head is inside
+     #msg-content, which is what a row click swaps, so the state is correct on
+     the htmx path as well as on a full page load. A browser without :has()
+     falls back to the old stacked layout, which is worse but not broken.
+
+     The sidebar goes too while reading, so the message gets the window. The
+     close button in the reader toolbar is the way back, and the list comes
+     back with the sidebar above it. */
+  .app:has(.view-head) #sidebar,
+  .app:has(.view-head) #list-pane { display: none; }
+  .app:has(.view-head) { grid-template-rows: minmax(0, 1fr); }
+  .app:not(:has(.view-head)) #main-content { display: none; }
+
+  /* THE SIDEBAR COLLAPSES TO ITS ACCOUNT BAR.
+
+     Everything from New message down to Log out folds away, leaving the
+     address and a ☰ to bring it back -- SnappyMail does the same at its own
+     narrow breakpoint, where the whole left panel becomes something you open
+     rather than something that is always there.
+
+     The account bar is what stays. It is the only part of that column that
+     answers a question you have while reading rather than one you have while
+     navigating -- which mailbox am I looking at -- and a toggle that hid it
+     would make the answer cost a click.
+
+     Collapsed by default: the checkbox starts unchecked on every page load,
+     so a narrow window opens showing mail rather than showing chrome. It is
+     deliberately NOT remembered; the state belongs to this window, and
+     restoring it would mean deciding what a wide window that was once narrow
+     should do. */
+  #sidebar { max-height: none; }
+  #sidebar-toggle:not(:checked) ~ #sidebar > :not(#account-bar):not(.skip-link) {
+    display: none;
+  }
+  /* Once open it is a panel, not the whole column: 60vh keeps the message
+     list visible underneath so the toggle reads as "reveal" rather than as
+     "navigate somewhere else". */
+  #sidebar-toggle:checked ~ #sidebar { max-height: 60vh; overflow-y: auto; }
+
+  .sidebar-toggle { display: inline-flex; }
+}
+
+/* Below 1350 the reader's toolbar does not fit on one row: it wants 705px of
+   buttons and the pane has less. Rather than let it wrap to two rows -- safe
+   since .btn-toolbar grew a min-height, but still two rows of icons above
+   every message -- the two groups with the least claim on a narrow screen
+   step aside.
+
+   Starring and filing, not replying or deleting. Both are things you do to a
+   message you have finished with, and both survive elsewhere: the list's own
+   toolbar can star and move any message, including this one. Reply, archive,
+   spam, delete, the more menu and prev/next all stay, which is close to the
+   set SnappyMail keeps on mobile.
+
+   That takes the toolbar to about 547px, which fits the 603px pane at the
+   1181px breakpoint -- so in three-column mode it never wraps at all. */
+@media (max-width: 1350px) {
+  .view-toolbar .tb-optional { display: none; }
+}
+
+/* .grid-2 is a form layout, not the app frame, and it stacks when the FORM is
+   cramped rather than when the mail panes are. Left at 900 deliberately: a
+   two-column field pair is perfectly readable at 1000px, and stacking it with
+   the mail layout would be one breakpoint doing two unrelated jobs. */
+@media (max-width: 900px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}
+
+/* — printing —
+   Print the open message and nothing else. The body is in a sandboxed iframe
+   whose own print() is deliberately unreachable from this page, so the reader
+   page is what gets printed and everything around the message is hidden.
+   The iframe needs an explicit height here: `height:100%` of a flex parent that
+   is no longer laid out prints as one blank page. */
+@media print {
+  html, body { height: auto; background: #fff; }
+  .sidebar, .list-pane, .view-toolbar, .view-modes, .notice-bar, .skip-link { display: none !important; }
+  .app { display: block; height: auto; padding: 0; overflow: visible; }
+  .view-pane, .view-card { display: block; height: auto; border: 0; overflow: visible; }
+  .view-body { height: auto; }
+  .view-body iframe { height: auto; min-height: 60vh; }
+}
+
+/* — admin panel — */
+.admin {
+  display: grid; grid-template-columns: var(--w-sidebar) minmax(0, 1fr);
+  min-height: 100vh;
+}
+.admin-side {
+  background: var(--c-chrome); color: var(--c-sidebar-text);
+  display: flex; flex-direction: column;
+}
+.admin-brand {
+  height: var(--h-toolbar); display: flex; align-items: center;
+  padding: 0 12px; font-weight: 700; font-size: 15px;
+  background: var(--c-chrome-dark);
+}
+.admin-nav {
+  display: block; padding: 8px 12px;
+  color: var(--c-sidebar-text); text-decoration: none; font-size: 14px;
+}
+.admin-nav:hover { background: var(--c-sidebar-hover); }
+.admin-nav[aria-current="true"] { background: var(--c-sidebar-sel); font-weight: 600; }
+.admin-side-foot { margin-top: auto; padding: 8px 0; border-top: 1px solid rgba(0,0,0,.25); }
+
+.admin-main { background: #f4f5f6; overflow-y: auto; }
+.admin-inner { max-width: 900px; margin: 0 auto; padding: 22px 18px 48px; }
+.admin-h1 { margin: 0 0 16px; font-size: 22px; }
+.admin-h2 { margin: 0 0 12px; font-size: 15px; }
+.admin-h3 { margin: 18px 0 8px; font-size: 13px; text-transform: uppercase;
+            letter-spacing: .06em; color: var(--c-text-dim); }
+.admin-card {
+  background: #fff; border: 1px solid var(--c-divider);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 16px;
+}
+.admin-field { margin-bottom: 12px; }
+.admin-field > label { display: block; margin-bottom: 4px; font-size: 12px; color: var(--c-text-dim); }
+.admin-field input[type=text], .admin-field input[type=number], .admin-field select {
+  width: 100%; height: 32px; padding: 0 8px;
+  font: 14px var(--font); color: var(--c-text);
+  background: #fff; border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+}
+.admin-check { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 0; }
+/* The master switch at the top of a feature's screen. Set apart with a rule
+   under it because it is not one field among the others -- everything below it
+   is conditional on it, and a checkbox in the same rhythm as the rest reads as
+   just another option. */
+.admin-switch {
+  padding-bottom: 12px; margin-bottom: 16px;
+  border-bottom: 1px solid var(--c-divider);
+}
+.admin-switch .admin-check input { width: 16px; height: 16px; }
+.admin-switch .admin-check input:disabled + span { color: var(--c-text-dim); }
+.admin-check input { width: auto; height: auto; }
+.admin-actions { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
+
+.admin-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.admin-table th {
+  text-align: left; font-size: 11px; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--c-text-dim); padding: 6px 8px; border-bottom: 1px solid var(--c-divider);
+}
+.admin-table td { padding: 7px 8px; border-bottom: 1px solid var(--c-divider); vertical-align: top; }
+.admin-table tr.is-off { opacity: .55; }
+.admin-table .right { text-align: right; white-space: nowrap; }
+.admin-table form { display: contents; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.admin-pre {
+  margin: 0; padding: 12px; background: #f6f6f6; border: 1px solid var(--c-divider);
+  border-radius: var(--radius-btn); font-size: 12px; white-space: pre-wrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.hint-changed { color: var(--c-accent-dark); }
+.cap-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+.grid-3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }
+
+@media (max-width: 900px) {
+  .admin { grid-template-columns: 1fr; }
+  .grid-3 { grid-template-columns: 1fr; }
+}
+
+/* — the big on/off switches — */
+/* A real checkbox with the track drawn from it, so it works with no script,
+   is reachable by keyboard, and is announced as a checkbox rather than as a
+   div somebody has taught to look like one. */
+.switch-row {
+  margin: 0 0 18px; padding: 12px 14px;
+  background: #f4f6f8; border: 1px solid #dde3e8; border-radius: var(--radius-btn);
+}
+.switch { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.switch input {
+  /* Off-screen rather than display:none: a hidden input is not focusable, and
+     this one is the control. The track below wears its focus ring. */
+  position: absolute; opacity: 0; width: 1px; height: 1px;
+}
+.switch-track {
+  flex: none; position: relative; width: 52px; height: 28px;
+  background: #b9c2cb; border-radius: 999px; transition: background .12s;
+}
+.switch-track::after {
+  content: ""; position: absolute; top: 3px; left: 3px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+  transition: transform .12s;
+}
+.switch input:checked + .switch-track { background: var(--c-accent); }
+.switch input:checked + .switch-track::after { transform: translateX(24px); }
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--c-accent-dark); outline-offset: 2px;
+}
+.switch-label { font-size: 15px; font-weight: 600; }
+.switch-row .hint { margin-top: 8px; }
+.inline-check { display: inline-flex; align-items: center; gap: 4px; }
+.inline-check input { width: auto; height: auto; }
+
+/* Key material is read character by character when it is read at all. */
+textarea.mono, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+.key-cell summary { cursor: pointer; }
+.key-form { margin-top: 6px; display: grid; gap: 6px; max-width: 420px; }
+.key-form textarea {
+  width: 100%; padding: 6px; resize: vertical;
+  border: 1px solid var(--c-border); border-radius: var(--radius-btn);
+}
+
+
+/* — the mailbox chooser —
+   A list of addresses with a button per row, rather than radios and one shared
+   button: the thing that opens should be the thing that was clicked. */
+.mb-toolbar { margin: 0 0 14px; }
+.mb-table td { vertical-align: middle; }
+.mb-table td form { margin: 0; }
+.btn-open { min-width: 72px; }
+
+/* The actions cell holds two buttons and two off-screen checkboxes. Laid out
+   in a row so the checkboxes -- which are .sr-only and therefore still in the
+   flow -- do not push the buttons apart. */
+.mb-row-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+
+/* An unread count worth noticing, and a zero that is not. */
+.unseen-count { font-variant-numeric: tabular-nums; }
+
+/* The add and edit dialogs carry four fields, so they need more room than the
+   new-folder one this shares its mechanism with. */
+.modal-wide { max-width: 520px; }
+.modal-wide .field { margin-bottom: 14px; }
+.modal-wide .field:last-of-type { margin-bottom: 0; }
+
+/* Deleting. Red at the top edge and on the heading rather than a red card:
+   a panel that is entirely red reads as an error that has already happened,
+   and this one is a question. */
+.modal-danger { border-top: 4px solid var(--c-danger); }
+.modal-danger h2 { color: var(--c-danger); }
+
+/* — the sign-in throttle summary on the mailbox page —
+   A status panel, not a table of data: the numbers are few and the point is
+   the shape of them, so the rows are quiet and the figures are not. */
+.throttle-card { margin-top: 18px; }
+.throttle-table { max-width: 340px; }
+.throttle-table td { border-bottom: none; padding: 3px 8px; }
+.throttle-table td.right { font-variant-numeric: tabular-nums; }

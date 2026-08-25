@@ -1,0 +1,544 @@
+{{/* Pane 2A: the message list's button bar. Acts on the ticked messages,
+     so it lives inside the list's form. */}}
+{{define "list-bar"}}<div id="list-bar" class="btn-toolbar list-toolbar"{{if .IsOOB "list-bar"}} hx-swap-oob="true"{{end}}>
+    <div class="btn-group">
+      <a hx-boost="true" class="btn" title="Reload" aria-label="Reload this folder"
+         href="/app/mailbox?folder={{.Folder}}{{if .Mailbox}}{{if .Mailbox.Page.Sort}}&amp;sort={{.Mailbox.Page.Sort}}{{end}}{{end}}">{{icon "reload"}}</a>
+    </div>
+
+    <div class="btn-group">
+      <details class="menu">
+        <summary class="btn" title="Move to a folder" aria-label="Move to a folder">{{icon "folder"}}</summary>
+        {{template "move-menu" $}}
+      </details>
+    </div>
+
+    <div class="btn-group">
+      {{if special .Folders "archive"}}
+      <button type="submit" class="btn" title="Archive" aria-label="Archive the selected messages"
+              formaction="/app/messages/action?action=archive&amp;folder={{.Folder | urlquery}}">{{icon "archive"}}</button>
+      {{end}}
+      {{if special .Folders "junk"}}
+        {{if eq .Folder (special .Folders "junk")}}
+        <button type="submit" class="btn" title="Not spam" aria-label="Move the selected messages back to the inbox"
+                formaction="/app/messages/action?action=notspam&amp;folder={{.Folder | urlquery}}">{{icon "check"}}</button>
+        {{else}}
+        <button type="submit" class="btn" title="Spam" aria-label="Move the selected messages to Junk"
+                formaction="/app/messages/action?action=spam&amp;folder={{.Folder | urlquery}}">{{icon "warning"}}</button>
+        {{end}}
+      {{end}}
+      <button type="submit" class="btn" title="Delete" aria-label="Delete the selected messages"
+              formaction="/app/messages/action?action=delete&amp;folder={{.Folder | urlquery}}">{{icon "trash"}}</button>
+    </div>
+
+    <div class="btn-group">
+      <details class="menu">
+        <summary class="btn" title="More actions" aria-label="More actions">{{icon "menu"}}</summary>
+        <menu class="drop-menu">
+          <li><button type="submit" class="drop-item"
+                      formaction="/app/messages/action?action=seen&amp;folder={{.Folder | urlquery}}">
+            <span class="drop-icon" aria-hidden="true">{{icon "envelope-open"}}</span>Mark as read</button></li>
+          <li><button type="submit" class="drop-item"
+                      formaction="/app/messages/action?action=unseen&amp;folder={{.Folder | urlquery}}">
+            <span class="drop-icon" aria-hidden="true">{{icon "envelope"}}</span>Mark as unread</button></li>
+          <li><button type="submit" class="drop-item"
+                      formaction="/app/messages/action?action=flag&amp;folder={{.Folder | urlquery}}">
+            <span class="drop-icon" aria-hidden="true">{{icon "star-on"}}</span>Add star</button></li>
+          <li><button type="submit" class="drop-item"
+                      formaction="/app/messages/action?action=unflag&amp;folder={{.Folder | urlquery}}">
+            <span class="drop-icon" aria-hidden="true">{{icon "star"}}</span>Remove star</button></li>
+          {{/* Read and filed in one press. Its own entry rather than asking
+               people to press two buttons in the right order: spam that has
+               been dealt with should not also be sitting in the unread count.
+               Only offered where there is somewhere to put it. */}}
+          {{if special .Folders "junk"}}
+          <li class="drop-sep"><button type="submit" class="drop-item"
+                      formaction="/app/messages/action?action=spam-seen&amp;folder={{.Folder | urlquery}}">
+            <span class="drop-icon" aria-hidden="true">{{icon "warning"}}</span>Mark as read and spam</button></li>
+          {{end}}
+          <li class="drop-sep"><button type="submit" class="drop-item"
+                      formaction="/app/messages/action?action=seen-all&amp;folder={{.Folder | urlquery}}">
+            <span class="drop-icon" aria-hidden="true">{{icon "check"}}</span>Mark the whole folder read</button></li>
+        </menu>
+      </details>
+    </div>
+
+    <div class="btn-group">
+      <details class="menu">
+        <summary class="btn" title="Sort" aria-label="Sort the message list">{{icon "sort"}}</summary>
+        <menu class="drop-menu">
+          {{$cur := ""}}{{if .Mailbox}}{{$cur = .Mailbox.Page.Sort}}{{end}}
+          {{range sortOptions}}
+          <li><a hx-boost="true" class="drop-item" {{if eq .Key $cur}}aria-current="true"{{end}}
+                 href="/app/mailbox?folder={{$.Folder}}&amp;sort={{.Key}}{{if $.Mailbox}}{{if $.Mailbox.Page.Query}}&amp;q={{$.Mailbox.Page.Query}}{{end}}{{end}}">
+            <span class="drop-icon" aria-hidden="true">{{.Icon}}</span>{{.Label}}
+          </a></li>
+          {{end}}
+        </menu>
+      </details>
+    </div>
+</div>{{end}}
+
+
+{{/* Pane 2B: the search row, and the tick-everything box beside it. The id
+     is list-search-bar rather than list-search: the GET form that carries the
+     query already owns that one. */}}
+{{define "list-search-bar"}}<div id="list-search-bar" class="list-header"{{if .IsOOB "list-search-bar"}} hx-swap-oob="true"{{end}}>
+      <input type="checkbox" id="check-all" data-check-all
+             aria-label="Select every message on this page">
+      <label class="sr-only" for="q">Search this folder</label>
+      <input id="q" type="search" name="q" form="list-search" placeholder="Search"
+             value="{{if .Mailbox}}{{.Mailbox.Page.Query}}{{end}}">
+      <button type="submit" form="list-search" class="btn" title="Search"
+              aria-label="Search this folder">{{icon "search"}}</button>
+      {{if and .Mailbox .Mailbox.Page.Query}}
+      <a hx-boost="true" class="btn" href="/app/mailbox?folder={{.Folder}}" title="Clear the search"
+         aria-label="Clear the search">{{icon "close"}}</a>
+      {{end}}
+</div>{{end}}
+
+
+{{/* Pane 2C: the messages themselves. The one region that is replaced by
+     something other than a click on it -- the poll in app.js reloads this
+     when new mail arrives. */}}
+{{define "message-list"}}<div id="message-list" class="list"{{if .IsOOB "message-list"}} hx-swap-oob="true"{{end}}>
+      {{if .Mailbox}}
+        {{range .Mailbox.Page.Messages}}
+        {{template "msg-row" (row $ .)}}
+        {{else}}
+        <p class="empty">
+          {{if .Mailbox.Page.Query}}Nothing matched “{{.Mailbox.Page.Query}}”.{{else}}This folder is empty.{{end}}
+        </p>
+        {{end}}
+      {{end}}
+</div>{{end}}
+
+
+{{/* Pane 1B: the new-message button. */}}
+{{define "compose-bar"}}<div id="compose-bar" class="compose-bar"{{if .IsOOB "compose-bar"}} hx-swap-oob="true"{{end}}>
+    <a hx-boost="true" class="btn btn-compose" href="/app/compose?folder={{.Folder}}">
+      {{icon "compose"}} New message
+    </a>
+</div>{{end}}
+
+
+{{/* Pane 1C: the IMAP folder list. Replaced on its own when the unread
+     counts move, which is every time a message is read. */}}
+{{define "folder-list"}}<nav id="folder-list" class="folders" aria-label="Folders"{{if .IsOOB "folder-list"}} hx-swap-oob="true"{{end}}>
+    {{range .Folders}}
+      {{if .Selectable}}
+      {{/* Aimed at the message list. A folder changes the list, the highlight
+           in this sidebar and what is in the reading pane -- and nothing
+           else, so the frame around all three stays where it is rather than
+           being rebuilt and repainted. The other two come back with the
+           response as out-of-band swaps; see handleMailbox. */}}
+      <a hx-boost="true" hx-target="#list-pane" hx-swap="outerHTML"
+         class="folder" style="{{indent .Depth}}"
+         href="/app/mailbox?folder={{.Name}}"
+         {{if eq .Name $.Folder}}aria-current="true"{{end}}>
+        <span class="folder-icon" aria-hidden="true">{{folderIcon .}}</span>
+        <span class="folder-name">{{.Display}}</span>
+        {{if .Unseen}}<span class="folder-count">{{.Unseen}}</span>{{end}}
+      </a>
+      {{end}}
+    {{else}}
+      {{/* Only when the list was actually fetched. A range's {{else}} takes no
+           condition -- {{else if}} is a parse error here and stops the app
+           starting, which is how this was caught. */}}
+      {{if $.FoldersLoaded}}
+      <p class="empty folders-empty">No folders</p>
+      {{end}}
+    {{end}}
+</nav>{{end}}
+
+
+{{/* Pane 1D: the buttons along the bottom of the sidebar. */}}
+{{define "sidebar-tools"}}<div id="sidebar-tools" class="sidebar-foot"{{if .IsOOB "sidebar-tools"}} hx-swap-oob="true"{{end}}>
+    <a hx-boost="true" class="btn btn-sidebar" href="/app/mailbox?folder={{.Folder}}"
+       aria-label="Refresh the folder list">{{icon "reload"}} Refresh</a>
+    {{/* A label, not a button: it toggles the checkbox above, which is what
+         opens the dialog. No script involved -- see the note below. */}}
+    <label class="btn btn-sidebar" for="new-folder">{{icon "folder-plus"}} New folder</label>
+    {{/* Straight to the folder manager rather than to Settings' front page:
+         it is the screen this button is about, and Settings is the next one
+         down anyway. */}}
+    <a hx-boost="true" class="btn btn-sidebar" href="/app/settings/folders">{{icon "folder-edit"}} Edit folders</a>
+    <a hx-boost="true" class="btn btn-sidebar" href="/app/settings">{{icon "settings"}} Settings</a>
+    {{/* Back to the mailbox page, for an application account only.
+
+         A mailbox session does not get this button, and the reason is not
+         permissions: it signed in as one mailbox, it has no others, and there
+         is no page behind the button for it to reach. Rendering it would be
+         offering a door onto a room that does not exist.
+
+         Not boosted, for the same reason Log out is not: it lands on a whole
+         document rather than a fragment to swap into this one. */}}
+    {{if and .User (not .Direct)}}
+    <a class="btn btn-sidebar" href="/mailboxes/">{{icon "settings"}} Admin</a>
+    {{end}}
+    {{/* Signing out is a POST -- a GET that ends a session can be fired by an
+         <img> on any page in another tab -- so this is a form and not a link,
+         and it is not boosted: it lands on the sign-in page, which is a whole
+         document rather than a fragment to swap into this one. */}}
+    <form method="POST" action="/logout">
+      <button type="submit" class="btn btn-sidebar">{{icon "power"}} Log out</button>
+    </form>
+</div>{{end}}
+
+
+{{/* The destinations for "Move to a folder".
+
+     One definition because there are two toolbars -- the list acts on the
+     ticked messages, the reader on the open one -- and the menu is the same
+     question in both. They were two copies, and a copy is what quietly answers
+     the question differently: add a condition to one (hidden folders, a
+     read-only Archive) and the other keeps offering what the first now refuses.
+
+     The dot is PageData, so $ inside is PageData whichever toolbar called it.
+     Every entry posts to the enclosing form; the verb rides in formaction, as
+     everywhere else in these toolbars. */}}
+{{define "move-menu"}}<menu class="drop-menu">
+  {{range $.Folders}}
+    {{if and .Selectable (ne .Name $.Folder)}}
+    <li><button type="submit" class="drop-item"
+                formaction="/app/messages/action?action=move&amp;folder={{$.Folder | urlquery}}&amp;dest={{.Name | urlquery}}">
+      <span class="drop-icon" aria-hidden="true">{{folderIcon .}}</span>{{.Display}}
+    </button></li>
+    {{end}}
+  {{end}}
+</menu>{{end}}
+
+
+{{/* The document title, defined once because it is now written twice: here in
+     the shell, and at the front of every htmx fragment. htmx reads a <title>
+     out of a swapped-in response and updates the tab with it -- without that
+     the title would say Mail while you are reading Settings, which is the kind
+     of wrong that only shows up in a bookmark or a screenshot. */}}
+{{define "page-title"}}<title>{{if .Account}}{{.Account.Email}} — {{end}}{{if .Brand.Title}}{{.Brand.Title}}{{else}}{{.Title}}{{end}}</title>{{end}}
+
+
+{{define "shell"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{{template "page-title" .}}
+<link rel="stylesheet" href="/static/mail.min.css">
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+{{/* The three timing settings, handed to the page rather than fetched by it.
+     They are already known at render time, so an endpoint to ask for them
+     would be a request per page to learn something we could have said.
+     Data attributes rather than an inline <script>: the CSP is
+     `script-src 'self'` with no nonce, so an inline script would not run. */}}
+<meta name="mc-check-seconds" content="{{.CheckSeconds}}">
+{{/* Which mailbox this page is for. The browser-held PGP key is namespaced by
+     it, so two accounts used in one browser cannot collide. */}}
+<meta name="mc-mailbox" content="{{if .Account}}{{.Account.Email}}{{end}}">
+</head>
+{{/* Every view is rooted at #app-body, so a boosted link replaces exactly the
+     view and leaves the document around it alone. Set here rather than on each
+     link: htmx inherits these, and 36 copies of the same two attributes is 36
+     chances for one of them to be different.
+
+     outerHTML rather than innerHTML because the fragment *is* #app-body -- an
+     innerHTML swap would nest a second one inside the first on every click. */}}
+<body hx-target="#app-body" hx-swap="outerHTML">
+{{.Body}}
+</body>
+</html>
+{{end}}
+
+
+{{/* The account switcher. Top left, as specified -- it is the first thing in
+     the sidebar, above the folder list, so "which mailbox am I in" is answered
+     before anything else on the page.
+
+     A <details> element rather than a button plus JavaScript: it opens and
+     closes, is keyboard operable and is announced as expanded/collapsed by a
+     screen reader, all natively. app.js only adds close-on-outside-click,
+     which has no markup equivalent -- so with JavaScript unavailable the menu
+     still works. */}}
+{{/* The address of the mailbox being read. A label, not a control.
+
+     It was a pull-down: the open mailbox, with the others listed under it to
+     switch between, plus links out to Settings and the admin panel. Choosing
+     which mailbox to read now happens on its own page before the mail
+     (/mailboxes), which is a better place for it -- there is room to add, edit
+     and remove there, which the menu had to link out to Settings for anyway.
+
+     What is left is the one thing this corner was always for: saying which
+     mailbox you are looking at. A menu whose only remaining job is to display
+     one line is a control that opens to disappoint. */}}
+{{define "switcher"}}
+<div id="account-bar" class="acct"{{if .IsOOB "switcher"}} hx-swap-oob="true"{{end}}>
+  {{/* The sidebar toggle, shown only on a narrow window. A label rather than
+       a button because the control is a checkbox in .app -- see the note on
+       #sidebar-toggle there. No script, so it works the same with scripting
+       off, like the new-folder dialog and the composer's full-screen switch.
+
+       It is in the account bar because the account bar is the part of the
+       sidebar that stays put when the rest collapses: the address is how you
+       know which mailbox you are looking at, which is not a thing to hide
+       behind a toggle. */}}
+  <label class="sidebar-toggle" for="sidebar-toggle"
+         title="Show or hide the folders and buttons"
+         aria-label="Show or hide the folders and buttons">{{icon "menu"}}</label>
+  <div class="acct-btn" title="{{if .Account}}{{.Account.Email}}{{else}}No mailbox attached{{end}}">
+    <span class="acct-avatar" aria-hidden="true">{{if .Account}}{{.Account.Initials}}{{else}}?{{end}}</span>
+    <span class="acct-name">{{if .Account}}{{.Account.Email}}{{else}}No mailbox{{end}}</span>
+  </div>
+</div>
+{{end}}
+
+
+{{define "sidebar"}}
+<aside id="sidebar" class="sidebar"{{if .IsOOB "sidebar"}} hx-swap-oob="true"{{end}}>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+  {{template "switcher" .}}
+
+  {{template "compose-bar" .}}
+
+  {{template "folder-list" .}}
+
+  {{/* Full-width stacked buttons, matching the New message button at the top
+       of this column rather than the icon-only toolbars across the page. They
+       are navy so the column reads top to bottom as one green button (the
+       thing you do most), the folder list, then three navy ones. */}}
+  {{/* The checkbox comes before both the button and the dialog because the CSS
+       reaches each of them with a sibling combinator: `:checked ~ .modal`
+       opens it, and `:focus-visible ~ .sidebar-foot label` puts the focus ring
+       on the visible button. It is off-screen rather than hidden so it stays
+       focusable -- it is the tab stop for this control. */}}
+  {{/* Checked when a create was refused (so the dialog reopens with the typed
+       name), and when the folder manager sent somebody here to make one --
+       that screen has no sidebar of its own to put the dialog in. */}}
+  <input type="checkbox" id="new-folder" class="sr-only" data-folder-dialog
+         {{if or .NewFolder .OpenNewFolder}}checked{{end}}>
+
+  {{template "sidebar-tools" .}}
+
+  {{/* The new-folder dialog.
+
+       Same shape as the one in SnappyMail: a name, and the folder to put it
+       inside. It opens on a checkbox with the CSS keying off `:checked`,
+       the same mechanism as the composer's full-screen switch, so it works
+       with scripting off -- app.js only adds Escape-to-close and moving the
+       caret into the name field.
+
+       It reopens by itself when a create was refused, carrying what was typed
+       back with it: a modal that closed on failure would take the half-typed
+       name with it. */}}
+  <div class="modal" data-folder-modal>
+    {{/* A separate scrim behind the card, rather than making the whole
+         backdrop a label: a label's children activate it too, so a click
+         anywhere in the form would close the dialog. */}}
+    <label class="modal-scrim" for="new-folder" aria-hidden="true"></label>
+    <form class="modal-card" method="POST" action="/app/folders/create"
+          aria-label="New folder">
+      <h2>New folder</h2>
+      {{with .NewFolder}}
+        {{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+      {{end}}
+
+      <div class="field">
+        <label for="nf-name">Folder name</label>
+        <input id="nf-name" name="name" type="text" required maxlength="200"
+               autocomplete="off" data-folder-name
+               value="{{with .NewFolder}}{{.Name}}{{end}}">
+      </div>
+
+      <div class="field">
+        <label for="nf-parent">Parent folder</label>
+        <select id="nf-parent" name="parent">
+          <option value="">(none — a top-level folder)</option>
+          {{$sel := ""}}{{with .NewFolder}}{{$sel = .Parent}}{{end}}
+          {{range .Folders}}
+            {{/* Unselectable entries are the ones a server exposes purely as
+                 containers -- they hold no mail and cannot be a parent. */}}
+            {{if .Selectable}}
+            <option value="{{.Name}}" {{if eq .Name $sel}}selected{{end}}>{{.Name}}</option>
+            {{end}}
+          {{end}}
+        </select>
+        <div class="hint">Leave this alone to create the folder at the top level.</div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Create</button>
+        <label class="btn" for="new-folder">Cancel</label>
+      </div>
+    </form>
+  </div>
+</aside>
+{{end}}
+
+
+{{/* The message list. Rendered by both the mailbox and reader views, which is
+     why it is its own template: clicking a message re-renders the whole
+     three-pane frame, so the list has to draw identically in both.
+
+     Everything below the search box lives inside ONE form posting to
+     /app/messages/action, so the row checkboxes are what the toolbar buttons
+     act on. Each button carries its own `formaction` with the verb (and, for
+     Move, the destination) in the query string, because a submit button can
+     contribute only one name/value pair of its own and these need two. Go's
+     FormValue reads the query string as well as the body, so the two arrive
+     together. No script is involved in any of it. */}}
+{{/* One row of the message list.
+
+     **A row must always tell the truth about the seen flag, first time.**
+     The browser counts the reading delay and then posts to say so; the row
+     that comes back is how it knows the job is done. Answer with a row that
+     still says unread and it will wait the delay again and post again -- for
+     ever, if the answer never changes. A handler that has just set the flag
+     must say so from what it did, not from what the mail server reports back
+     (see handleMessageRow: a FETCH after a STORE can be answered from before
+     it).
+
+
+     Its own definition because it is rendered in two places and must be
+     identical in both: inside the list, and on its own as an out-of-band swap
+     when opening a message marks it read. Two copies of this markup would
+     drift, and the way they would drift is that the row you just clicked
+     stops matching every other row in the list.
+
+     The id is what an out-of-band swap finds; see rowCtx. */}}
+{{define "msg-row"}}{{$ := .Page}}{{$oob := .OOB}}{{with .Msg}}
+{{$open := false}}{{if $.Reader}}{{if $.Reader.Message}}{{$open = eq $.Reader.Message.UID .UID}}{{end}}{{end}}
+<div id="msg-{{.UID}}" class="msg-row{{if not .Seen}} unread{{end}}{{if $open}} is-open{{end}}"
+     {{if $oob}}hx-swap-oob="true"{{end}}
+     {{/* The reading delay, as a trigger on the row itself.
+
+          load delay:Ns fires once, N seconds after this row arrives -- it is
+          not a poll. Open a message and leave it alone and it fires; open
+          another first and this row is replaced (by the plain one sent back
+          with that click), taking the pending trigger with it, so nothing has
+          to cancel anything.
+
+          Everything the request needs is in hx-vals, which htmx sends as the
+          POST body. The URL carries none of it: half in the path and half in
+          a query string is two places to look for one thing.
+
+          Which row gets it is decided in Go and named in TimedRow, because
+          the server records what it sent so the next click can kill it -- and
+          a record of something the template decided separately is a record
+          that can be wrong. */}}
+     {{if eq $.TimedRow .UID}}
+     hx-post="/app/messages/read"
+     hx-vals='{"uid": "{{.UID}}", "folder": "{{$.Folder}}"}'
+     hx-trigger="load delay:{{$.MarkReadSeconds}}s"
+     hx-target="this" hx-swap="outerHTML"
+     {{end}}
+>
+  <input type="checkbox" class="msg-check" name="uid" value="{{.UID}}"
+         aria-label="Select the message from {{if .From}}{{.From}}{{else}}an unknown sender{{end}}">
+  {{/* Every row is its own loader: the click aims at this row, so what comes
+       back replaces it -- which is what takes the bold off and turns the
+       background to the open colour. The message itself arrives with the same
+       response as an out-of-band swap of the reading pane.
+
+       That way round because the row is what was clicked. Pointing the target
+       at the pane instead meant naming an id that does not exist until
+       something is already open, and from the mailbox the click did nothing
+       at all. */}}
+  <a hx-boost="true" hx-target="#msg-{{.UID}}" hx-swap="outerHTML" class="msg"
+     href="/app/message/{{.UID}}?folder={{$.Folder}}{{if $.Mailbox}}{{if $.Mailbox.Page.Query}}&amp;q={{$.Mailbox.Page.Query}}{{end}}{{if $.Mailbox.Page.Sort}}&amp;sort={{$.Mailbox.Page.Sort}}{{end}}&amp;page={{$.Mailbox.Page.Page}}{{end}}"
+     {{if $.Reader}}{{if $.Reader.Message}}{{if eq $.Reader.Message.UID .UID}}aria-current="true"{{end}}{{end}}{{end}}>
+    <span class="msg-line">
+      <span class="msg-from">{{if .From}}{{.From}}{{else}}(no sender){{end}}</span>
+      <span class="msg-date">{{shortDate .Date}}</span>
+    </span>
+    <span class="msg-line">
+      <span class="msg-subject">{{if .Subject}}{{.Subject}}{{else}}(no subject){{end}}</span>
+      <span class="msg-meta">
+        {{if .Flagged}}<span class="flagged" title="Starred" aria-label="Starred">★</span>{{end}}
+        {{if .HasAttach}}<span class="attach" title="Has attachments" aria-label="Has attachments">📎</span>{{end}}
+        <span class="msg-size">{{humanSize .Size}}</span>
+      </span>
+    </span>
+  </a>
+</div>
+{{end}}{{end}}
+
+
+{{/* The one row that changed, travelling on its own. */}}
+{{/* One row on its own.
+
+     list-row is the row as the answer to a click on it: htmx put the request
+     there, so it is the swap target and carries no hx-swap-oob. oob-row is the
+     same row travelling with a response aimed at something else. Same markup
+     either way -- see msg-row. */}}
+{{define "list-row"}}{{if .Row}}{{template "msg-row" (row . .Row)}}{{end}}{{end}}
+{{define "oob-row"}}{{if .Row}}{{template "msg-row" (oobRow . .Row)}}{{end}}{{end}}
+
+{{/* The row that was open before this click.
+
+     It has to be redrawn, and not only to take the highlight off. A row opened
+     while unread is polling itself, waiting to be marked read; abandoned, it
+     would keep asking every ten seconds for a message nobody is reading. Drawn
+     against the message now open it comes back plain: not the open one, so no
+     trigger -- and still unread, because nothing read it. */}}
+{{define "oob-prev-row"}}{{if .PrevRow}}{{template "msg-row" (oobRow . .PrevRow)}}{{end}}{{end}}
+
+
+{{define "list"}}
+<section id="list-pane" class="list-pane" aria-label="Messages"{{if .IsOOB "list"}} hx-swap-oob="true"{{end}}>
+  {{/* The search is a GET form and the list is a POST form, and forms cannot
+       nest -- so the search form is an empty sibling holding only its hidden
+       fields, and its visible controls sit in the card's header row carrying
+       `form="list-search"`. That is what puts the search box inside the card,
+       where the original has it, without either form swallowing the other. */}}
+  <form id="list-search" method="GET" action="/app/mailbox" role="search">
+    <input type="hidden" name="folder" value="{{.Folder}}">
+    {{if .Mailbox}}<input type="hidden" name="sort" value="{{.Mailbox.Page.Sort}}">{{end}}
+  </form>
+
+  {{/* Everything below is ONE form posting to /app/messages/action, so the row
+       checkboxes are what the toolbar buttons act on. Each button carries its
+       own `formaction` with the verb (and, for Move, the destination) in the
+       query string, because a submit button can contribute only one name/value
+       pair of its own and these need two. Go's FormValue reads the query string
+       as well as the body, so the two arrive together. No script is involved in
+       any of it. */}}
+  <form method="POST" action="/app/messages/action" class="list-stack">
+  <input type="hidden" name="folder" value="{{.Folder}}">
+  {{if .Mailbox}}
+  <input type="hidden" name="page" value="{{.Mailbox.Page.Page}}">
+  <input type="hidden" name="q" value="{{.Mailbox.Page.Query}}">
+  <input type="hidden" name="sort" value="{{.Mailbox.Page.Sort}}">
+  {{end}}
+
+  {{template "list-bar" .}}
+
+  <div class="list-form">
+    {{template "list-search-bar" .}}
+
+    {{if and .Mailbox .Mailbox.Page.SortUnsupported}}
+    <p class="list-note">This mail server cannot sort; the list is in arrival order.</p>
+    {{end}}
+
+    {{template "message-list" .}}
+
+    {{if .Mailbox}}
+    <div class="list-foot">
+      <span>{{.Mailbox.Page.Total}} message{{if ne .Mailbox.Page.Total 1}}s{{end}}</span>
+      {{if gt .Mailbox.Page.Pages 1}}
+      <nav class="paginator" aria-label="Pages">
+        {{if hasPrev .Mailbox.Page}}
+        <a hx-boost="true" class="page-btn" href="/app/mailbox?folder={{.Folder}}&amp;page={{sub .Mailbox.Page.Page 1}}{{if .Mailbox.Page.Query}}&amp;q={{.Mailbox.Page.Query}}{{end}}{{if .Mailbox.Page.Sort}}&amp;sort={{.Mailbox.Page.Sort}}{{end}}"
+           aria-label="Newer messages">‹</a>
+        {{end}}
+        <span class="page-at">{{.Mailbox.Page.Page}} / {{.Mailbox.Page.Pages}}</span>
+        {{if hasNext .Mailbox.Page}}
+        <a hx-boost="true" class="page-btn" href="/app/mailbox?folder={{.Folder}}&amp;page={{add .Mailbox.Page.Page 1}}{{if .Mailbox.Page.Query}}&amp;q={{.Mailbox.Page.Query}}{{end}}{{if .Mailbox.Page.Sort}}&amp;sort={{.Mailbox.Page.Sort}}{{end}}"
+           aria-label="Older messages">›</a>
+        {{end}}
+      </nav>
+      {{end}}
+    </div>
+    {{end}}
+  </div>
+  </form>
+</section>
+{{end}}

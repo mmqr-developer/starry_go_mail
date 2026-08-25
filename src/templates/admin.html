@@ -1,0 +1,584 @@
+{{/* The three transport-security choices for an IMAP or SMTP server.
+
+     Four selects ask this -- IMAP and SMTP, in the admin panel's domain
+     presets and in a person's own mailbox settings -- and the answer is the
+     same list of three. As four copies, adding a fourth mode meant finding all
+     four; missing one gives a form that cannot express what the config already
+     stores.
+
+     The dot is the currently selected value, which is why this takes an
+     argument rather than reading a field: the four call sites reach it by four
+     different paths (.IMAPSecurity, .SMTPSecurity, and two locals that default
+     to starttls for a mailbox not yet saved). */}}
+{{define "security-options"}}<option value="starttls" {{if eq . "starttls"}}selected{{end}}>STARTTLS</option>
+<option value="tls" {{if eq . "tls"}}selected{{end}}>TLS</option>
+<option value="none" {{if eq . "none"}}selected{{end}}>None</option>{{end}}
+
+
+{{define "admin"}}
+<div id="app-body" class="admin">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <aside class="admin-side">
+    <div class="admin-brand">{{.Brand.Title}} — Administration</div>
+    <nav aria-label="Admin sections">
+      {{range .Admin.Sections}}
+      <a hx-boost="true" class="admin-nav" href="/admin/{{.Slug}}"
+         {{if eq .Slug $.Admin.Section}}aria-current="true"{{end}}>{{.Title}}</a>
+      {{end}}
+    </nav>
+    <div class="admin-side-foot">
+      {{/* No "back to mail" link: this identity has no mailbox to go back to.
+           A link that always redirects is a link that lies about where it
+           goes. */}}
+      <form method="POST" action="/logout" style="padding:0 1rem">
+        <button type="submit" class="btn">Log out</button>
+      </form>
+    </div>
+  </aside>
+
+  <main id="main-content" tabindex="-1" class="admin-main">
+    <div class="admin-inner">
+      <h1 class="admin-h1">{{.Admin.Title}}</h1>
+
+      {{if .Admin.Flash}}<div class="alert alert-ok">{{.Admin.Flash}}</div>{{end}}
+      {{if .Admin.Error}}<div class="alert">{{.Admin.Error}}</div>{{end}}
+
+      {{if eq .Admin.Section "accounts"}}{{template "admin-accounts" .}}
+      {{else if eq .Admin.Section "ollama"}}{{template "admin-ollama" .}}
+      {{else if eq .Admin.Section "claude"}}{{template "admin-claude" .}}
+      {{else if eq .Admin.Section "contacts"}}{{template "admin-contacts" .}}
+      {{else if eq .Admin.Section "extensions"}}{{template "admin-extensions" .}}
+      {{else if eq .Admin.Section "config"}}{{template "admin-config" .}}
+      {{else if eq .Admin.Section "about"}}{{template "admin-about" .}}
+      {{else}}{{template "admin-settings" .}}
+      {{end}}
+
+      {{/* The throttle belongs under Security rather than beside the settings
+           form, because it is not a setting: it is what the settings have been
+           doing. The limits are edited above; this is the result. */}}
+      {{if eq .Admin.Section "security"}}{{template "admin-throttle" .}}{{end}}
+    </div>
+  </main>
+</div>
+{{end}}
+
+
+{{/* General / Login / Branding / Security. The form is generated from
+     settingDefs, so adding a setting in Go adds a control here with no
+     template change and no second list to keep in step. */}}
+{{define "admin-settings"}}
+<form method="POST" action="/admin/settings/{{.Admin.Section}}" class="admin-card">
+  {{range .Admin.Settings}}
+  <div class="admin-field">
+    {{if eq .Kind "bool"}}
+      <label class="admin-check">
+        <input type="checkbox" name="{{.Key}}" value="1" {{if .Checked}}checked{{end}}>
+        <span>{{.Label}}</span>
+      </label>
+    {{else}}
+      <label for="s-{{.Key}}">{{.Label}}</label>
+      <input id="s-{{.Key}}" name="{{.Key}}"
+             type="{{if eq .Kind "int"}}number{{else}}text{{end}}"
+             {{if eq .Kind "int"}}min="{{.Min}}" max="{{.Max}}"{{end}}
+             value="{{.Value}}">
+    {{end}}
+    {{if .Help}}<div class="hint">{{.Help}}</div>{{end}}
+    {{if not .IsDefault}}<div class="hint hint-changed">Changed from the default ({{.Default}})</div>{{end}}
+  </div>
+  {{end}}
+  <button type="submit" class="btn btn-primary">Save</button>
+</form>
+{{end}}
+
+
+{{/* Ollama: the server, and which of its models a mailbox may use.
+
+     Two halves, and they are two different kinds of setting. The address and
+     the timeout are ordinary deployment values and come from the same
+     settingDefs loop every other section uses. The approved models cannot:
+     there is no setting per model name, the names come from the server rather
+     than from this app, and the control is a tick beside each one.
+
+     The hidden models_listed field is load-bearing. When the server cannot be
+     reached this page renders no checkboxes, and an unticked box and an absent
+     box look identical in a submitted form -- so without it, saving the page
+     while the server was down would un-approve everything. */}}
+{{define "admin-ollama"}}
+<form method="POST" action="/admin/settings/ollama" class="admin-card">
+  {{/* The master switch, first, because everything below it depends on it.
+       Off leaves the address, the approvals and every mailbox's chosen model
+       exactly where they are -- it is a decision, not an un-configuring. */}}
+  <div class="admin-field admin-switch">
+    <label class="admin-check">
+      <input type="checkbox" name="ollama.enabled" value="1" {{if .Admin.On}}checked{{end}}>
+      <span><strong>Ollama is available on this deployment</strong></span>
+    </label>
+    <div class="hint">
+      {{if .Admin.On}}
+        Mailboxes see the Ollama section in their settings, the drafting button
+        in the composer, and Ollama Scan.
+      {{else}}
+        <strong>Off.</strong> Ollama does not appear anywhere for anybody: no
+        drafting button, no scanning, no Ollama section in a mailbox's
+        settings. Everything configured below is kept.
+      {{end}}
+    </div>
+  </div>
+
+  {{range .Admin.Settings}}
+  <div class="admin-field">
+    <label for="s-{{.Key}}">{{.Label}}</label>
+    <input id="s-{{.Key}}" name="{{.Key}}"
+           type="{{if eq .Kind "int"}}number{{else}}text{{end}}"
+           {{if eq .Kind "int"}}min="{{.Min}}" max="{{.Max}}"{{end}}
+           value="{{.Value}}">
+    {{if .Help}}<div class="hint">{{.Help}}</div>{{end}}
+  </div>
+  {{end}}
+
+  <h2 class="admin-h2">Approved models</h2>
+  {{if .Admin.ModelsListed}}
+  <input type="hidden" name="models_listed" value="1">
+  <p class="hint" style="margin-top:0">
+    Read from the server. A model is off until it is ticked here, including one
+    that appears later — pulling a model onto the server is not the same as
+    offering it to everybody who reads mail through this app.
+  </p>
+  <table class="admin-table">
+    <thead><tr><th></th><th>Model</th><th></th></tr></thead>
+    <tbody>
+      {{range .Admin.Models}}
+      <tr>
+        <td>
+          <input type="checkbox" id="m-{{.Name}}" name="approved" value="{{.Name}}"
+                 {{if .Approved}}checked{{end}}>
+        </td>
+        <td><label for="m-{{.Name}}" class="mono">{{.Name}}</label></td>
+        <td class="hint">
+          {{if .Missing}}approved, but the server no longer has it{{end}}
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="3" class="hint">
+        The server reports no models. Pull one with
+        <code>ollama pull &lt;name&gt;</code> and reload this page.
+      </td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="hint" style="margin-top:0">
+    {{if .Admin.ModelsError}}
+      <span class="hint-error">{{.Admin.ModelsError}}</span><br>
+      The approvals already saved are untouched — this form will not change them
+      while the list cannot be read.
+    {{else}}
+      Save a server address, and the models it has will be listed here to
+      approve.
+    {{end}}
+  </p>
+  {{end}}
+
+  <button type="submit" class="btn btn-primary">Save</button>
+</form>
+{{end}}
+
+
+{{/* Claude: the same two halves as Ollama -- deployment settings and an
+     approved-model list -- with one difference that shapes the whole screen.
+
+     The credential is in mail_client.json and this panel cannot write it. So
+     the switch has to be able to say "not yours to turn on" and point at where
+     it IS turned on, rather than accepting a click that would fail later with
+     a message about an API key nobody here can see.
+
+     The same load-bearing models_listed field as Ollama, for the same reason:
+     no list rendered means no approval may be rewritten. */}}
+{{define "admin-claude"}}
+<form method="POST" action="/admin/settings/claude" class="admin-card">
+  <div class="admin-field admin-switch">
+    <label class="admin-check">
+      <input type="checkbox" name="claude.enabled" value="1"
+             {{if .Admin.On}}checked{{end}} {{if not .Admin.CanEnable}}disabled{{end}}>
+      <span><strong>Claude is available on this deployment</strong></span>
+    </label>
+    <div class="hint">
+      {{if not .Admin.CanEnable}}
+        <span class="hint-error"><strong>Claude cannot be turned on.</strong></span>
+        There is no <code>anthropic_api_key</code> in <code>mail_client.json</code>.
+        The key is billed to whoever owns it, so it is set in the config file by
+        whoever runs this server — not here, and it is never readable back.
+      {{else if .Admin.On}}
+        Mailboxes see the Claude section in their settings and may choose a
+        model from the approved list below.
+      {{else}}
+        <strong>Off.</strong> Claude does not appear anywhere for anybody.
+        Nothing is sent to Anthropic while this is off.
+      {{end}}
+    </div>
+  </div>
+
+  {{range .Admin.Settings}}
+  <div class="admin-field">
+    <label for="s-{{.Key}}">{{.Label}}</label>
+    <input id="s-{{.Key}}" name="{{.Key}}"
+           type="{{if eq .Kind "int"}}number{{else}}text{{end}}"
+           {{if eq .Kind "int"}}min="{{.Min}}" max="{{.Max}}"{{end}}
+           value="{{.Value}}">
+    {{if .Help}}<div class="hint">{{.Help}}</div>{{end}}
+  </div>
+  {{end}}
+
+  <h2 class="admin-h2">Approved models</h2>
+  {{if .Admin.ModelsListed}}
+  <input type="hidden" name="models_listed" value="1">
+  <p class="hint" style="margin-top:0">
+    Read from the API. A model is off until it is ticked here, including one
+    that appears later — a model being available on the account is not the same
+    as offering it to everybody who reads mail through this app.
+  </p>
+  <table class="admin-table">
+    <thead><tr><th></th><th>Model</th><th></th></tr></thead>
+    <tbody>
+      {{range .Admin.Models}}
+      <tr>
+        <td>
+          <input type="checkbox" id="c-{{.Name}}" name="approved" value="{{.Name}}"
+                 {{if .Approved}}checked{{end}}>
+        </td>
+        <td><label for="c-{{.Name}}" class="mono">{{.Name}}</label></td>
+        <td class="hint">
+          {{if .Missing}}approved, but the API no longer offers it{{end}}
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="3" class="hint">The API reports no models on this key.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="hint" style="margin-top:0">
+    {{if .Admin.ModelsError}}
+      <span class="hint-error">{{.Admin.ModelsError}}</span><br>
+      The approvals already saved are untouched — this form will not change them
+      while the list cannot be read.
+    {{else}}
+      Set <code>anthropic_api_key</code> in <code>mail_client.json</code> and
+      reload, and the models the key may use will be listed here to approve.
+    {{end}}
+  </p>
+  {{end}}
+
+  <button type="submit" class="btn btn-primary">Save</button>
+</form>
+{{end}}
+
+
+{{/* The superuser's account management. This is the whole of what that
+     identity may do to a person: create one, rename, enable, disable, reset a
+     password, clear a second factor, remove. Notably absent, each on purpose:
+
+       - no mailbox controls. Attaching one means holding somebody's mailbox
+         password, and this account never does.
+       - no "enable two-factor". Only Clear. A factor issued by a third party
+         is a shared secret with a longer name.
+       - no admin checkbox. There is no is_admin any more: this area IS the
+         administrator, and it is one identity from the config file. */}}
+{{define "admin-accounts"}}
+      <div class="admin-card">
+        <p class="hint" style="margin-top:0">
+          Application accounts — the logins for this client, not mailboxes.
+          Each person attaches their own mailboxes after signing in, with a
+          password only they type; this screen cannot add or remove one.
+        </p>
+
+        <table class="admin-table">
+          <thead>
+            <tr>
+              <th>Username</th><th>Name</th><th>Last sign-in</th>
+              <th>Mailboxes</th><th>Two-factor</th><th>Active</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Admin.Accounts}}
+            <tr>
+              <td class="mono">{{.Username}}</td>
+              <td>
+                <form method="POST" action="/admin/users/{{.UserID}}/name">
+                  <input name="display_name" value="{{.DisplayName}}"
+                         aria-label="Display name for {{.Username}}">
+                  <button type="submit" class="btn">Rename</button>
+                </form>
+              </td>
+              <td class="hint">{{.LastLogin}}</td>
+              <td class="hint">{{.Mailboxes}}</td>
+              <td>
+                {{if .TOTPOn}}
+                  <form method="POST" action="/admin/users/{{.UserID}}/totp/clear">
+                    <button type="submit" class="btn">Clear</button>
+                  </form>
+                {{else}}
+                  <span class="hint">off</span>
+                {{end}}
+              </td>
+              <td>
+                <form method="POST" action="/admin/users/{{.UserID}}/active">
+                  {{if .IsActive}}
+                    <input type="hidden" name="active" value="0">
+                    <button type="submit" class="btn">Disable</button>
+                  {{else}}
+                    <input type="hidden" name="active" value="1">
+                    <button type="submit" class="btn">Enable</button>
+                  {{end}}
+                </form>
+              </td>
+              <td class="right">
+                <form method="POST" action="/admin/users/{{.UserID}}/password">
+                  <input type="password" name="password" autocomplete="new-password"
+                         placeholder="new password"
+                         aria-label="New password for {{.Username}}">
+                  <button type="submit" class="btn">Reset password</button>
+                </form>
+              </td>
+            </tr>
+            <tr>
+              <td colspan="7" class="hint">
+                {{/* The confirmation is the typed username, not a "yes". When
+                     the answer is the same for every row, the wrong row gets
+                     confirmed by reflex. */}}
+                <form method="POST" action="/admin/users/{{.UserID}}/delete">
+                  Remove <strong class="mono">{{.Username}}</strong>
+                  {{if .Mailboxes}}
+                    and the {{.Mailboxes}} mailbox{{if ne .Mailboxes 1}}es{{end}}
+                    attached to it — those stored mail passwords are destroyed
+                    and cannot be recovered.
+                  {{else}}
+                    — this account has no mailboxes attached.
+                  {{end}}
+                  <input name="confirm" placeholder="type {{.Username}} to confirm"
+                         aria-label="Type {{.Username}} to confirm removal">
+                  <button type="submit" class="btn">Remove</button>
+                </form>
+              </td>
+            </tr>
+            {{else}}
+            <tr><td colspan="7" class="hint">
+              No accounts yet. Add the first one below.
+            </td></tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+
+      <form method="POST" action="/admin/users/add" class="admin-card">
+        <h2 class="admin-h2">Add an account</h2>
+
+        <div class="field">
+          <label for="s-username">Username</label>
+          <input id="s-username" name="username" value="{{.Admin.AddUsername}}"
+                 required autocapitalize="off" autocorrect="off" spellcheck="false">
+          <p class="hint">
+            Not an email address. An address is how somebody signs in to a
+            mailbox; a username is how they sign in to this app, and the one
+            sign-in box tells them apart by the <code>@</code>.
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="s-name">Display name</label>
+          <input id="s-name" name="display_name" value="{{.Admin.AddName}}">
+        </div>
+
+        <div class="field">
+          <label for="s-password">Password</label>
+          <input id="s-password" type="password" name="password" required
+                 autocomplete="new-password">
+          <p class="hint">
+            At least {{.Admin.MinPassword}} characters. The person should change
+            it themselves once they are in — this one has been through you.
+          </p>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Create account</button>
+      </form>
+
+      <p class="hint">
+        Two-factor can be cleared here but not created. A second factor is only
+        a second factor if its owner is the only one who has ever seen the
+        secret, so somebody who has lost theirs gets it cleared here and sets up
+        a new one from their own settings screen.
+      </p>
+{{end}}
+
+
+{{define "admin-contacts"}}
+<div class="admin-card">
+  <h2 class="admin-h2">Not built</h2>
+  <p>There is no contacts feature in this client, so there is nothing here to
+     configure. The original's screen sets a storage backend (PDO/SQLite),
+     CardDAV sync and a suggestions limit.</p>
+  <p class="hint">Building it would mean: a <code>contacts</code> table keyed by
+     application account, an autocomplete on the compose screen's To/Cc fields,
+     and — if sync is wanted — a CardDAV client. The storage question is already
+     answered here: it would go in the same SQLite database as everything else,
+     so the original's Storage section has no equivalent.</p>
+  <p class="hint">Controls are deliberately absent rather than shown and inert.
+     See <code>NOTES.md</code>.</p>
+</div>
+{{end}}
+
+{{define "admin-extensions"}}
+<div class="admin-card">
+  <h2 class="admin-h2">Not built</h2>
+  <p>This client has no plugin system. The original loads PHP extensions from a
+     directory and lists them here with enable/disable and per-extension
+     configuration.</p>
+  <p class="hint">A Go binary cannot load plugins the way an interpreted app can —
+     the realistic equivalents are compile-time registration, or out-of-process
+     hooks over HTTP. Neither is worth building before there is a second thing
+     that wants one.</p>
+  <p class="hint">Controls are deliberately absent rather than shown and inert.
+     See <code>NOTES.md</code>.</p>
+</div>
+{{end}}
+
+
+{{define "admin-config"}}
+<div class="admin-card">
+  <p class="hint" style="margin-top:0">
+    Every setting in one place, with its current value and whether it has been
+    changed. The equivalent of the original's <code>application.ini</code> screen.
+    Edit them on their own sections — this view is for answering “what is actually
+    set here?”, which is the question you have when something behaves oddly.
+  </p>
+  <table class="admin-table">
+    <thead><tr><th>Key</th><th>Value</th><th>Default</th><th>Section</th></tr></thead>
+    <tbody>
+      {{range .Admin.Settings}}
+      <tr>
+        <td class="mono">{{.Key}}<div class="hint">{{.Help}}</div></td>
+        <td class="mono">{{if .IsDefault}}<span class="hint">{{.Value}}</span>{{else}}<strong>{{.Value}}</strong>{{end}}</td>
+        <td class="mono hint">{{.Default}}</td>
+        <td><a hx-boost="true" href="/admin/{{.Section}}">{{.Section}}</a></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
+
+{{define "admin-about"}}
+{{with .Admin.About}}
+<div class="admin-card">
+  <h2 class="admin-h2">Build</h2>
+  <table class="admin-table">
+    <tbody>
+      <tr><td>Version</td><td class="mono">{{.Build}}</td></tr>
+      <tr><td>Go</td><td class="mono">{{.GoVersion}}</td></tr>
+      <tr><td>Platform</td><td class="mono">{{.Platform}}</td></tr>
+      <tr><td>Uptime</td><td class="mono">{{.Uptime}}</td></tr>
+      <tr><td>Debug mode</td><td class="mono">{{if .Debug}}on — config and database in the development directory{{else}}off{{end}}</td></tr>
+    </tbody>
+  </table>
+</div>
+<div class="admin-card">
+  <h2 class="admin-h2">Storage</h2>
+  <table class="admin-table">
+    <tbody>
+      <tr><td>Config directory</td><td class="mono">{{.ConfigDir}}</td></tr>
+      <tr><td>Database</td><td class="mono">{{.DBPath}}</td></tr>
+      <tr><td>Schema version</td><td class="mono">{{.SchemaVersion}}</td></tr>
+      <tr><td>Application accounts</td><td class="mono">{{.Users}}</td></tr>
+      <tr><td>Attached mailboxes</td><td class="mono">{{.MailAccounts}}</td></tr>
+      <tr><td>Domain presets</td><td class="mono">{{.Domains}}</td></tr>
+    </tbody>
+  </table>
+</div>
+<div class="admin-card">
+  <h2 class="admin-h2">Runtime</h2>
+  <table class="admin-table">
+    <tbody>
+      <tr><td>Goroutines</td><td class="mono">{{.NumGoroutine}}</td></tr>
+      <tr><td>Heap in use</td><td class="mono">{{printf "%.1f" .AllocMB}} MB</td></tr>
+      <tr><td>Pooled IMAP connections</td><td class="mono">{{.PooledConns}}</td></tr>
+    </tbody>
+  </table>
+  <p class="hint">Pooled connections are held per mailbox and closed after five
+     idle minutes, so this number tracks recent activity rather than the number
+     of accounts.</p>
+</div>
+{{end}}
+{{end}}
+
+
+{{/* The sign-in throttle, for the superuser.
+
+     The same counts the mailbox page shows, and then the addresses, which that
+     page deliberately withholds -- every application account sees it, and a
+     list of what is being refused is a list of who is being attacked and from
+     where. This screen is reached only by the superuser, only from an address
+     superuser_ip_allowed permits, by the identity that would act on it. */}}
+{{define "admin-throttle"}}
+<div class="admin-card throttle-card">
+  <h2 class="admin-h2">Sign-in throttle</h2>
+  {{with .Admin.Throttle}}
+  {{if .On}}
+  <table class="admin-table throttle-table">
+    <tbody>
+      <tr><td>Blocked in the past day</td><td class="right"><strong>{{.Day}}</strong></td></tr>
+      <tr><td>past week</td><td class="right"><strong>{{.Week}}</strong></td></tr>
+      <tr><td>past month</td><td class="right"><strong>{{.Month}}</strong></td></tr>
+      <tr><td>Blocked right now</td><td class="right"><strong>{{.Active}}</strong></td></tr>
+    </tbody>
+  </table>
+  <p class="hint">
+    Addresses, not attempts — one address refused repeatedly counts once.
+    {{if .IPLimit}}After <strong>{{.IPLimit}}</strong> failed sign-ins in an hour
+    an address is refused for {{.IPMinutes}} minutes.{{end}}
+    {{if .UsernameLimit}} After <strong>{{.UsernameLimit}}</strong> against one
+    username from several addresses, every one of them is refused for
+    {{.UsernameMinutes}} minutes.{{end}}
+  </p>
+  {{else}}
+  <p class="hint" style="margin-top:0">
+    <strong>Off.</strong> Nothing limits how many passwords may be guessed
+    against this server. Set <span class="mono">login_throttle</span> in
+    <span class="mono">mail_client.json</span>.
+  </p>
+  {{end}}
+  {{end}}
+
+  {{if .Admin.Blocks}}
+  <h3 class="admin-h3">Refused right now</h3>
+  <table class="admin-table">
+    <thead>
+      <tr><th>Address</th><th>For</th><th>Why</th></tr>
+    </thead>
+    <tbody>
+      {{range .Admin.Blocks}}
+      <tr>
+        <td class="mono">{{.IP}}</td>
+        <td>{{.Left}}</td>
+        <td class="hint">{{.Reason}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{/* No unblock button. Lifting a block has to clear the failures behind it
+       as well, or the address is back inside its limit on the next mistake --
+       and that is one command with one answer, rather than a control here that
+       does half of it. */}}
+  <p class="hint">
+    Lift one with <span class="mono">mailctl blocks unblock &lt;address&gt;</span>
+    on the server, which also forgets the failures behind it.
+    <span class="mono">mailctl blocks list</span> shows the last month.
+  </p>
+  {{else}}
+  {{if .Admin.Throttle.On}}
+  <p class="hint">Nothing is refused at this moment.</p>
+  {{end}}
+  {{end}}
+</div>
+{{end}}

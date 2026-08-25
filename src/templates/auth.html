@@ -1,0 +1,166 @@
+{{/* The four lines every standalone page needs. Its own definition because
+     there are five of these pages and nothing else kept them in step -- the
+     stylesheet link and the viewport meta were already five copies, and a
+     sixth page would have been a sixth copy.
+
+     The <head> tags stay in each page rather than being opened here and closed
+     there: login and setup add a <script> before the close, and a partial that
+     opens a tag someone else has to close is worse than the four lines it
+     saves. The title is .Title for all five, so a page that forgets to set one
+     shows the brand alone rather than a stale name from another screen. */}}
+{{define "auth-head"}}<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{if .Brand.Title}}{{.Brand.Title}} — {{end}}{{.Title}}</title>
+<link rel="stylesheet" href="/static/mail.min.css">
+{{/* htmx on every page, not only the mail screen.
+     These pages were built without it on the grounds that a form POST and a
+     redirect need nothing else, which was true right up until one of them
+     wanted to fetch something -- and then an hx-get sat there doing nothing,
+     silently, because the attribute is inert with no library to read it. The
+     alternative was hand-written fetch in app.js, which is a second way to do
+     the one thing this app already has a way to do.
+     Before app.js, matching the order in shell.html: both are deferred, so
+     they run in document order and anything in app.js can assume htmx. */}}
+<script src="/static/htmx.min.js" defer></script>{{end}}
+
+
+{{define "login"}}<!doctype html>
+<html lang="en">
+<head>
+{{template "auth-head" .}}
+{{/* app.js for the Show/Hide control on the password field. htmx comes from
+     auth-head above, as it does on every page. */}}
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<main class="auth">
+  <div class="auth-card">
+    <h1>{{if .Brand.Title}}{{.Brand.Title}}{{else}}Sign in{{end}}</h1>
+    <p class="lede">{{if .Brand.Lede}}{{.Brand.Lede}}{{else if .Direct}}Sign in with your email address and its mailbox password.{{else}}Use your mail client account — not a mailbox password.{{end}}</p>
+
+    {{with .Auth}}
+      {{if .Notice}}<div class="alert alert-ok">{{.Notice}}</div>{{end}}
+      {{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+      <form method="POST" action="/login">
+        {{/* Filled in by app.js with the browser's IANA zone, which is how
+             this server learns where the person signing in lives -- a session
+             ends at 4am where they are, not where the server is. Empty with
+             scripting off, which means the server's own zone; nothing about
+             signing in depends on it. */}}
+        <input type="hidden" name="tz" value="" data-timezone>
+        <div class="field">
+          {{/* Same field name either way, so one handler reads one form. What
+               changes is what it is asking for: an application username, or
+               the mailbox address the mail server itself knows. */}}
+          <label for="username">{{if .Direct}}Email address{{else}}Username{{end}}</label>
+          <input id="username" name="username" type="{{if .Direct}}email{{else}}text{{end}}"
+                 value="{{.Username}}"
+                 autocomplete="{{if .Direct}}email{{else}}username{{end}}" autofocus required>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password"
+                 autocomplete="current-password" required
+                 {{if .NeedTOTP}}autofocus{{end}}>
+        </div>
+        {{/* Always on the form, so a code can be typed on the first attempt
+             rather than only after a round trip. Optional until the server has
+             actually asked for it, and never keyed to the address being typed:
+             showing or hiding it per account would turn the login form into a
+             way to enumerate who has two-factor turned on. */}}
+        <div class="field">
+          <label for="totp">Two-factor code{{if not .NeedTOTP}}
+            <span class="field-optional">if you use one</span>{{end}}</label>
+          {{/* inputmode=numeric brings up a number pad on a phone;
+               autocomplete=one-time-code lets iOS and Android offer the code
+               from the notification, which is the difference between typing
+               six digits and tapping once. */}}
+          <input id="totp" name="totp" type="text" inputmode="numeric"
+                 autocomplete="one-time-code" placeholder="000000"
+                 pattern="[0-9 ]*"
+                 {{if .NeedTOTP}}required autofocus{{end}}>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%">Sign in</button>
+      </form>
+    {{end}}
+  </div>
+</main>
+</body>
+</html>
+{{end}}
+
+
+{{define "error"}}<!doctype html>
+<html lang="en">
+<head>
+{{template "auth-head" .}}
+</head>
+<body>
+<main class="auth">
+  <div class="auth-card">
+    <h1>Something went wrong</h1>
+    <div class="alert">{{.Error}}</div>
+    <a class="btn" href="/app/">Back to the mailbox</a>
+    <a class="btn" href="/app/settings">Settings</a>
+  </div>
+</main>
+</body>
+</html>
+{{end}}
+
+
+{{/* What GET /logout answers with.
+
+     Signing out is a POST, deliberately: a GET that ends a session can be fired
+     by any <img src="/logout"> on any page in another tab. But typing /logout in
+     the address bar is a reasonable thing to do, and answering it with a bare
+     "Method Not Allowed" is the app refusing to explain itself. So the GET
+     confirms and the button posts -- the state change stays where it was. */}}
+{{define "signout"}}<!doctype html>
+<html lang="en">
+<head>
+{{template "auth-head" .}}
+</head>
+<body>
+<main class="auth">
+  <div class="auth-card">
+    <h1>Sign out{{if .User}}, {{.User.Name}}?{{else}}?{{end}}</h1>
+    {{if .Direct}}
+    <p class="lede">This erases your mailbox password from the server, so signing back in
+      means entering it again.</p>
+    {{end}}
+    <form method="POST" action="/logout">
+      <button type="submit" class="btn btn-primary" style="width:100%">Sign out</button>
+    </form>
+    <p class="lede" style="margin:14px 0 0"><a href="/app/">Back to the mailbox</a></p>
+  </div>
+</main>
+</body>
+</html>
+{{end}}
+
+
+{{/* The page a blocked address gets instead of the sign-in form.
+
+     No form, no username field and no hint about which rule fired or how many
+     attempts are left. Somebody guessing passwords learns only that they have
+     stopped being able to; somebody who mistyped theirs learns when to come
+     back. Those are the same sentence, which is the point. */}}
+{{define "denied"}}<!doctype html>
+<html lang="en">
+<head>
+{{template "auth-head" .}}
+</head>
+<body>
+<main class="auth">
+  <div class="auth-card">
+    <h1>Denied</h1>
+    <p class="lede">Too many failed sign-in attempts from this address.</p>
+    {{with .Auth}}{{if .Error}}<p class="hint">{{.Error}}</p>{{end}}{{end}}
+    <p class="hint">If this is not you, somebody else on your network has been
+      trying to sign in. Nothing has been given away: an attempt that fails
+      tells the person making it nothing about whether the account exists.</p>
+  </div>
+</main>
+</body>
+</html>{{end}}

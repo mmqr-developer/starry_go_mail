@@ -1,0 +1,321 @@
+{{/* Where an application account lands at sign-in.
+
+     It replaced the account switcher in the mail screen's top-left corner.
+     That had to be a pull-down because it was reached from inside the mail;
+     a page reached before the mail can just be a list, with room to add,
+     edit and remove -- which the pull-down had to link out to Settings for
+     anyway.
+
+     A mailbox session never sees this page: it signed in as one mailbox and
+     has nothing to choose between. */}}
+{{define "mailboxes"}}<!doctype html>
+<html lang="en">
+<head>
+{{template "auth-head" .}}
+{{/* app.js for the Show/Hide password control. htmx comes from auth-head,
+     and the unread counts below use it. */}}
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<div id="app-body" class="admin">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <aside class="admin-side">
+    <div class="admin-brand">{{.Brand.Title}}</div>
+    <nav aria-label="Sections">
+      {{/* No link to /admin: that area belongs to the superuser, who never
+           sees this page. A link that 404s for everybody who can read it is
+           worse than no link. */}}
+      <a class="admin-nav" href="/mailboxes/"
+         {{if not (.Mailboxes.SectionIs "totp")}}aria-current="true"{{end}}>Your mailboxes</a>
+      <a class="admin-nav" href="/mailboxes/totp"
+         {{if .Mailboxes.SectionIs "totp"}}aria-current="true"{{end}}>One Time Password</a>
+    </nav>
+    <div class="admin-side-foot">
+      <p class="hint" style="padding:0 1rem">
+        Signed in as <strong class="mono">{{.User.Username}}</strong>.
+      </p>
+      {{/* Signing out is a POST: a GET that ends a session can be fired by an
+           <img> on any page in another tab. */}}
+      <form method="POST" action="/logout" style="padding:0 1rem">
+        <button type="submit" class="btn">Log out</button>
+      </form>
+    </div>
+  </aside>
+
+  <main id="main-content" tabindex="-1" class="admin-main">
+    <div class="admin-inner">
+      {{if .Mailboxes.SectionIs "totp"}}
+      <h1 class="admin-h1">One Time Password</h1>
+
+      {{if .Mailboxes.Flash}}<div class="alert alert-ok">{{.Mailboxes.Flash}}</div>{{end}}
+      {{if .Mailboxes.Error}}<div class="alert">{{.Mailboxes.Error}}</div>{{end}}
+
+      {{/* The same panel the mail screen's Settings shows, posting here
+           instead -- see mailboxes_totp.go for why it is reachable from
+           this page at all. */}}
+      {{with .Mailboxes.TOTP}}{{template "totpCard" .}}{{end}}
+      {{else}}
+      <h1 class="admin-h1">Your mailboxes</h1>
+
+      {{if .Mailboxes.Flash}}<div class="alert alert-ok">{{.Mailboxes.Flash}}</div>{{end}}
+      {{if .Mailboxes.Error}}<div class="alert">{{.Mailboxes.Error}}</div>{{end}}
+
+      {{/* Add sits above the list: it is the thing you do when the list is
+           empty, and the empty list is where a new account starts. */}}
+      <div class="mb-toolbar">
+        {{/* Label, then checkbox, then the dialog it opens -- in that order,
+             because the CSS is an ADJACENT sibling selector. It was a general
+             one, and with two dialogs in a row's action cell, checking the
+             edit box matched the delete dialog too: both are later siblings,
+             so opening Edit opened Delete on top of it. */}}
+        <label for="mb-add" class="btn btn-primary" role="button" tabindex="0">
+          Add Email Address
+        </label>
+        <input type="checkbox" id="mb-add" class="sr-only" data-dialog
+               {{if and .Mailboxes.Adding .Mailboxes.Reopen}}checked{{end}}>
+        {{template "mailboxDialog" (dialogFor $ nil)}}
+      </div>
+
+      {{if .Mailboxes.Accounts}}
+      <div class="admin-card">
+        <table class="admin-table mb-table">
+          <thead>
+            <tr>
+              <th><span class="sr-only">Open</span></th>
+              <th>Address</th>
+              <th>Label</th>
+              <th class="right">Unread</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Mailboxes.Accounts}}
+            <tr>
+              {{/* Its own form, so the button opens THIS row. The list used to
+                   be radios and one shared button, which meant the thing that
+                   opened was whatever had last been ticked rather than the
+                   thing that was clicked. */}}
+              <td>
+                <form method="POST" action="/mailboxes/open">
+                  <input type="hidden" name="account_id" value="{{.AccountID}}">
+                  <button type="submit" class="btn btn-primary btn-open"
+                          title="Read {{.Email}}">Open</button>
+                </form>
+              </td>
+              <td class="mono">{{.Email}}</td>
+              <td>{{if ne .Label .Email}}{{.Label}}{{end}}</td>
+
+              {{/* Fetched after the page, per row: counting is an IMAP round
+                   trip, and inline it would hold the list behind the slowest
+                   server -- a mailbox whose host is down would hang the page
+                   for a number that is a convenience.
+
+                   The dash is what the cell holds until the answer arrives,
+                   and what it keeps if the request fails. */}}
+              <td class="right" title="Unread in INBOX"
+                  hx-get="/mailboxes/{{.AccountID}}/unseen"
+                  hx-trigger="load"
+                  hx-swap="innerHTML"><span class="hint">&mdash;</span></td>
+
+              <td class="right mb-row-actions">
+                <label for="mb-edit-{{.AccountID}}" class="btn" role="button" tabindex="0">Edit</label>
+                <input type="checkbox" id="mb-edit-{{.AccountID}}" class="sr-only" data-dialog
+                       {{if eqID $.Mailboxes.EditingID .AccountID}}checked{{end}}>
+                {{template "mailboxDialog" (dialogFor $ .)}}
+
+                <label for="mb-del-{{.AccountID}}" class="btn btn-danger" role="button" tabindex="0">Delete</label>
+                <input type="checkbox" id="mb-del-{{.AccountID}}" class="sr-only" data-dialog>
+                {{template "mailboxDeleteDialog" .}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+      {{else}}
+      <div class="admin-card">
+        <p class="hint" style="margin-top:0">
+          No mailboxes attached yet. Add one and it becomes the mailbox this
+          account reads.
+        </p>
+      </div>
+      {{end}}
+
+      {{/* The sign-in throttle, in summary.
+
+           Counts, never addresses: this page is seen by every application
+           account, and a list of what is currently being refused is a list of
+           who is being attacked and from where. `mailctl blocks list` is where
+           that lives, for somebody with shell access to the machine.
+
+           Shown even when the numbers are zero, because "nothing has been
+           blocked" and "there is no throttle" look identical otherwise, and
+           the first is reassuring only if you can tell it from the second. */}}
+      <div class="admin-card throttle-card">
+        <h2 class="admin-h2">Sign-in throttle</h2>
+        {{with .Mailboxes.Throttle}}
+        {{if .On}}
+        <table class="admin-table throttle-table">
+          <tbody>
+            <tr>
+              <td>Blocked in the past day</td>
+              <td class="right"><strong>{{.Day}}</strong></td>
+            </tr>
+            <tr>
+              <td>past week</td>
+              <td class="right"><strong>{{.Week}}</strong></td>
+            </tr>
+            <tr>
+              <td>past month</td>
+              <td class="right"><strong>{{.Month}}</strong></td>
+            </tr>
+            <tr>
+              <td>Blocked right now</td>
+              <td class="right"><strong>{{.Active}}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="hint">
+          Addresses, not attempts — one address refused repeatedly counts once.
+          {{if .IPLimit}}After <strong>{{.IPLimit}}</strong> failed sign-ins in an
+          hour an address is refused for {{.IPMinutes}} minutes.{{end}}
+          {{if .UsernameLimit}} After <strong>{{.UsernameLimit}}</strong> against one
+          username from several addresses, every one of them is refused for
+          {{.UsernameMinutes}} minutes.{{end}}
+        </p>
+        <p class="hint">
+          Which addresses, and lifting one, are
+          <span class="mono">mailctl blocks list</span> and
+          <span class="mono">mailctl blocks unblock</span> on the server.
+        </p>
+        {{else}}
+        <p class="hint" style="margin-top:0">
+          <strong>Off.</strong> Nothing limits how many passwords may be guessed
+          against this server. Set <span class="mono">login_throttle</span> in
+          <span class="mono">mail_client.json</span>.
+        </p>
+        {{end}}
+        {{end}}
+      </div>
+      {{end}}
+    </div>
+  </main>
+</div>
+</body>
+</html>{{end}}
+
+{{/* The add/edit dialog. One template for both, because they ask identical
+     questions -- a second copy is what comes to disagree about a default, the
+     add form gaining a field the edit form does not offer so editing silently
+     clears it. Dot is a dialogVM: the page plus the mailbox, or nil for add. */}}
+{{define "mailboxDialog"}}
+<div class="modal">
+  <label class="modal-scrim" for="{{.CheckboxID}}" aria-label="Close"></label>
+  <form method="POST" action="/mailboxes/save" class="modal-card modal-wide">
+    <h2>{{if .Adding}}Add Email Address{{else}}Edit {{.Account.Email}}{{end}}</h2>
+    {{if not .Adding}}<input type="hidden" name="account_id" value="{{.Account.AccountID}}">{{end}}
+
+    <div class="field">
+      {{/* Neither the id nor the name says "email".
+
+           A browser decides what to offer to save by reading them, and an
+           input called "email" beside a password field is the exact shape it
+           looks for. What it would file is another person's mailbox
+           credential, under whoever happens to be signed in here. "xnail" is
+           deliberately a non-word: anything recognisable, in either attribute,
+           puts the heuristic back. The server reads the same name -- see
+           mailAccountFromForm. */}}
+      <label for="{{.CheckboxID}}-xnail">Email address</label>
+      <input id="{{.CheckboxID}}-xnail" name="xnail" required autocapitalize="off"
+             {{/* Not autocomplete="email": a browser pairs a field it thinks
+                  is a username with the password field below it and offers to
+                  save the two together. The address here belongs to the
+                  mailbox being attached, not to whoever is signed in. */}}
+             autocorrect="off" spellcheck="false" autocomplete="off"
+             value="{{if not .Adding}}{{.Account.Email}}{{end}}">
+      <p class="hint">Must be on a domain this server handles.</p>
+    </div>
+
+    <div class="field">
+      <label for="{{.CheckboxID}}-label">Label</label>
+      <input id="{{.CheckboxID}}-label" name="label"
+             value="{{if not .Adding}}{{if ne .Account.Label .Account.Email}}{{.Account.Label}}{{end}}{{end}}">
+      <p class="hint">What this list calls it. Blank means the address.</p>
+    </div>
+
+    <div class="field">
+      {{/* Neither the id nor the name says "password", and autocomplete is
+           off rather than new-password.
+
+           This box is not the signing-in person's password -- it is the
+           credential for somebody else's mailbox on a mail server, typed by an
+           administrator who may be attaching an account that is not theirs. A
+           browser that offers to remember it files another person's mail
+           password under this operator's login for this site, and then offers
+           to fill it in the next time anybody attaches anything. The heuristics
+           that trigger that read the id, the name and autocomplete, so all
+           three are kept clear of it. */}}
+      <label for="{{.CheckboxID}}-mailbox-secret">Mailbox password</label>
+      <input id="{{.CheckboxID}}-mailbox-secret" type="password" name="imap_secret"
+             autocomplete="off" data-lpignore="true" data-1p-ignore
+             {{if .Adding}}required{{end}}>
+      {{/* No "use this for SMTP too" field. There is nothing to say: the
+           handler falls back to the IMAP password whenever no SMTP one is
+           posted, and this dialog never posts one -- so the hidden input that
+           used to sit here was read by nothing and decided nothing. */}}
+      <p class="hint">
+        {{if .Adding}}
+          The password for the mailbox on the mail server. Stored encrypted,
+          because IMAP needs the original on every connection.
+        {{else}}
+          Leave blank to keep the stored password.
+        {{end}}
+      </p>
+    </div>
+
+    {{/* No server boxes. Host, port, security and certificate name are facts
+         about a domain, named once in mail_client.json -- so a mailbox is an
+         address and a password, and one on an unserved domain is refused
+         rather than half-configured here. */}}
+    <div class="field">
+      <label for="{{.CheckboxID}}-login">Login name <span class="hint">(optional)</span></label>
+      <input id="{{.CheckboxID}}-login" name="imap_username" autocapitalize="off"
+             autocorrect="off" spellcheck="false"
+             value="{{if not .Adding}}{{.Account.IMAPUsername}}{{end}}">
+      <p class="hint">Only if the server wants a name other than the address. Blank is normal.</p>
+    </div>
+
+    <div class="modal-actions">
+      <button type="submit" class="btn btn-primary">
+        {{if .Adding}}Add{{else}}Save{{end}}
+      </button>
+      <label class="btn" for="{{.CheckboxID}}" role="button" tabindex="0">Cancel</label>
+    </div>
+  </form>
+</div>
+{{end}}
+
+{{/* Deleting. Red, and it names the address in the heading rather than in a
+     sentence underneath -- the question is which mailbox, and it should be
+     answerable without reading a paragraph. */}}
+{{define "mailboxDeleteDialog"}}
+<div class="modal">
+  <label class="modal-scrim" for="mb-del-{{.AccountID}}" aria-label="Close"></label>
+  <form method="POST" action="/mailboxes/{{.AccountID}}/delete" class="modal-card modal-danger">
+    <h2>Delete {{.Email}}?</h2>
+    <p class="hint">
+      The stored password is destroyed and cannot be recovered, along with this
+      mailbox's signature and keys. <strong>The mailbox on the mail server is
+      untouched</strong> — this only detaches it from your account.
+    </p>
+    {{/* Names the row this dialog belongs to. The server refuses a POST that
+         does not, so a stray or replayed request is not a deletion. */}}
+    <input type="hidden" name="confirm" value="{{.Email}}">
+    <div class="modal-actions">
+      <button type="submit" class="btn btn-danger">Delete {{.Email}}</button>
+      <label class="btn" for="mb-del-{{.AccountID}}" role="button" tabindex="0">Cancel</label>
+    </div>
+  </form>
+</div>
+{{end}}

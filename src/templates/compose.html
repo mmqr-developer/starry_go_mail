@@ -1,0 +1,448 @@
+{{define "compose"}}
+<div id="app-body" class="app">
+  {{template "sidebar" .}}
+  {{template "list" .}}
+  {{/* The composer opens **docked in the reading pane**, where the message
+       being replied to was a moment ago, so the three-pane frame stays put and
+       the folder list and the message list are both still there. Full screen
+       is one press away and is the same form either way -- see the toggle in
+       the toolbar. It used to open full screen always, which meant every
+       reply hid the conversation it was a reply to. */}}
+  <main id="main-content" tabindex="-1" class="view-pane">
+  {{with .Compose}}
+  {{/* data-compose is what app.js binds the format switch and the rich editor
+       to. Everything inside works without script: the format radios are real
+       radios that submit, and the plain textarea is a real textarea. What
+       needs script is the rich editor -- see the note on .compose-html
+       below. */}}
+  <form class="compose" method="POST" action="/app/compose/send" data-compose
+        aria-label="{{if .IsReply}}Reply{{else}}New message{{end}}">
+    <input type="hidden" name="folder" value="{{$.Folder}}">
+    <input type="hidden" name="in_reply_to" value="{{.Draft.InReplyTo}}">
+    <input type="hidden" name="references" value="{{.Draft.References}}">
+    {{/* The editor is a contenteditable and contenteditable is not a form
+         control, so it submits nothing on its own. app.js copies its markup
+         in here on submit. Server-side this is sanitised before it is sent --
+         handleSend -- because a field like this is as forgeable as any
+         other. */}}
+    <input type="hidden" name="html_body" value="">
+    {{/* The copy of this message currently sitting in Drafts, or 0 if there is
+         not one yet. app.js updates it after each autosave, so the next save
+         replaces that copy rather than adding another, and a successful send
+         takes it away. */}}
+    <input type="hidden" name="draft_uid" value="{{.Draft.DraftUID}}" data-draft-uid>
+
+    {{/* The full-screen switch is a real checkbox, and the CSS keys off
+         `:checked` -- so it works with no script at all, which a button
+         toggling a class could not. It is off-screen rather than
+         display:none, because a hidden input is not focusable and this one has
+         to be reachable by keyboard from its label.
+         It carries a name, so the state survives a failed send: handleSend
+         reads it back onto the draft and the composer re-renders the way the
+         user had it rather than snapping back into the pane. */}}
+    <input type="checkbox" id="compose-full" name="fullscreen" class="sr-only"
+           data-compose-full {{if .FullScreen}}checked{{end}}>
+
+    <div class="compose-toolbar">
+      <button type="submit" class="btn btn-primary">{{icon "send"}} Send</button>
+
+      {{/* Radios rather than a select or a button: the choice is between two
+           visible options, it has to survive a failed send, and with no script
+           at all it still posts the right format. */}}
+      <fieldset class="compose-format" data-format-switch>
+        <legend class="sr-only">Message format</legend>
+        <label class="format-opt">
+          <input type="radio" name="format" value="plain" {{if not .IsHTML}}checked{{end}}>
+          <span>Plain text</span>
+        </label>
+        <label class="format-opt">
+          <input type="radio" name="format" value="html" {{if .IsHTML}}checked{{end}}>
+          <span>HTML</span>
+        </label>
+      </fieldset>
+
+      {{/* Saving by hand, and the no-script path for the whole draft feature:
+           the autosave happens on navigating away, which needs script to
+           notice. formaction rather than a second form -- forms cannot
+           nest. */}}
+      <button type="submit" class="btn" formaction="/app/compose/draft"
+              formnovalidate title="Save to Drafts">{{icon "save"}} Save draft</button>
+
+      {{/* Attach. The file input is the control and the label is what it looks
+           like -- the same arrangement as the image button in the rich
+           toolbar, for the same reason: a bare <input type=file> cannot be
+           styled to match, and label-wrapping keeps it keyboard-reachable
+           because the input is the tab stop.
+
+           Here in the main toolbar rather than in the formatting one, because
+           attaching a file has nothing to do with the format the message is
+           written in -- a plain-text message can carry a PDF, and the rich
+           toolbar is not on screen at all when the composer is in plain mode.
+
+           `hidden` until app.js takes it over. Uploading and the strip below
+           both need script, and a paperclip that silently attached nothing
+           would be worse than no paperclip: the message would go without the
+           file and nothing on screen would have said so. */}}
+      <label class="btn compose-attach" title="Attach a file"
+             data-attach-control hidden>
+        {{icon "attach"}} <span>Attach</span>
+        {{/* The upload is htmx: choosing files posts them together with the
+             ids already in the strip, and the answer is the whole strip back.
+             hx-encoding is what makes it multipart rather than urlencoded --
+             without it the files are silently not sent.
+             The input is cleared after each request so choosing the same
+             file twice in a row still fires a change event. That is done in
+             app.js on htmx:afterRequest, not with hx-on: this app's CSP has
+             no 'unsafe-eval' and htmx compiles hx-on with new Function, so
+             the attribute would never have run. */}}
+        <input type="file" multiple data-attach-input name="file"
+               hx-post="/app/compose/attach"
+               hx-encoding="multipart/form-data"
+               hx-trigger="change"
+               hx-include="[name='attach']"
+               hx-target="#attach-strip" hx-swap="outerHTML">
+      </label>
+
+      {{/* Only where an assistant is actually configured. A button that always
+           appears and always answers "not set up" is a control that lies
+           about what this install can do.
+
+           Named after whichever one this mailbox uses, because "Draft with
+           Ollama" on a deployment that drafts with Claude is a small lie about
+           where the text of your email is going. */}}
+      {{if $.AssistReady}}
+      <button type="button" class="btn" data-assist
+              data-assist-kind="{{if .IsReplyAll}}replyall{{else if .IsReply}}reply{{else if .IsForward}}forward{{else}}new{{end}}"
+              title="Ask {{$.AssistName}} for a first draft">{{icon "sparkle"}} Draft with {{$.AssistName}}</button>
+      {{end}}
+
+      {{/* Signing and encrypting, shown only where there is a key to do it
+           with. Two dead switches on a composer would look like mail being
+           protected when it is not, which is worse than no switches at all.
+
+           Checkboxes rather than a single "secure" toggle because they are
+           genuinely different promises: signing says who wrote it and
+           encrypting says who can read it, and a recipient can be missing a
+           key for the second while the first still works. */}}
+      {{if .PGPReady}}
+      <fieldset class="compose-pgp" data-pgp>
+        <legend class="sr-only">Protection</legend>
+        <label class="format-opt" title="Prove this message came from you and was not altered">
+          <input type="checkbox" name="pgp_sign" value="1" data-pgp-sign
+                 {{if .Sign}}checked{{end}}>
+          <span>{{icon "shield"}} Sign</span>
+        </label>
+        <label class="format-opt" title="Only the recipients can read it. Every recipient needs a key on their contact">
+          <input type="checkbox" name="pgp_encrypt" value="1" data-pgp-encrypt
+                 {{if .Encrypt}}checked{{end}}>
+          <span>{{icon "lock"}} Encrypt</span>
+        </label>
+      </fieldset>
+
+      {{/* The passphrase for a protected private key. Shown only once one of
+           the boxes above is ticked, and never given a value: it is typed for
+           this one send and posted once. autocomplete is off so a password
+           manager does not offer to remember a key passphrase as a website
+           login, which is the wrong thing in the wrong vault. */}}
+      <input type="password" class="pgp-pass" name="pgp_passphrase"
+             data-pgp-pass placeholder="Key passphrase (if your key has one)"
+             autocomplete="off" hidden>
+
+      {{/* Where the key lives in this browser rather than on the server, the
+           page has to hand the sealed bytes back with the send -- the server
+           keeps no copy by design. app.js fills this in from localStorage. */}}
+      {{if .PGPInBrowser}}
+      <input type="hidden" name="pgp_sealed_key" data-pgp-sealed>
+      {{end}}
+      {{end}}
+
+      {{/* Pushes the two trailing buttons right while the bar fits on one
+           line, and collapses rather than stranding them when it wraps. */}}
+      <span class="toolbar-spacer"></span>
+
+      {{/* Both icons are rendered and the CSS shows whichever matches the
+           state. The label is the control: clicking it toggles the checkbox
+           above, and it is in the tab order through that checkbox. */}}
+      <label for="compose-full" class="btn compose-full-btn"
+             title="Full screen" data-compose-full-label>
+        <span class="when-docked">{{icon "expand"}}</span>
+        <span class="when-full">{{icon "collapse"}}</span>
+        <span class="sr-only">Full screen</span>
+      </label>
+
+      <a hx-boost="true" class="btn" href="/app/mailbox?folder={{$.Folder}}"
+         title="Close" aria-label="Discard and close">{{icon "close"}}</a>
+    </div>
+
+    {{if .Error}}
+    <div class="notice-bar" style="background:#fdecea;border-color:#f5c6c2">
+      <strong>Not sent.</strong> <span>{{.Error}}</span>
+    </div>
+    {{end}}
+    {{if .Notice}}
+    <div class="compose-note">{{.Notice}}</div>
+    {{end}}
+
+    <div class="compose-fields">
+      {{/* From is display-only. A user may only send as an address they have
+           attached, so the value comes from the selected account and the form
+           does not submit it -- see handleSend. */}}
+      <div class="compose-row">
+        <label for="c-from">From</label>
+        <input id="c-from" type="text" value="{{.Draft.From}}" readonly>
+      </div>
+      <div class="compose-row">
+        <label for="c-to">To</label>
+        <input id="c-to" type="text" name="to" value="{{.Draft.To}}"
+               autocomplete="off" required {{if not .IsReply}}autofocus{{end}}>
+      </div>
+      <div class="compose-row">
+        <label for="c-cc">Cc</label>
+        <input id="c-cc" type="text" name="cc" value="{{.Draft.Cc}}" autocomplete="off">
+      </div>
+      <div class="compose-row">
+        <label for="c-bcc">Bcc</label>
+        <input id="c-bcc" type="text" name="bcc" value="{{.Draft.Bcc}}" autocomplete="off">
+      </div>
+      <div class="compose-row">
+        <label for="c-subject">Subject</label>
+        <input id="c-subject" type="text" name="subject" value="{{.Draft.Subject}}" autocomplete="off">
+      </div>
+    </div>
+
+    {{/* The attachment strip.
+
+         **Each row's hidden input IS the attachment.** The file itself is on
+         the server, uploaded when it was chosen; what travels with the message
+         is the id in here. So removing a row removes the file from the
+         message, the autosave's FormData picks these up with everything else,
+         and a failed send re-renders the strip from the store rather than
+         asking anybody to choose their files again.
+
+         Rows are usually added by app.js. The ones rendered here are a
+         composer being drawn a second time: after a refused send, and on a
+         draft reopened from the Drafts folder with files already in it. */}}
+    {{template "attachStrip" .AttachStrip}}
+
+    {{/* The assist bar. For a new message it asks what to write about; for a
+         reply it offers the same box as an optional steer, because "reply
+         saying no, politely" is a different message from whatever the model
+         would have chosen on its own.
+
+         An inline bar rather than a prompt() for the same reason as the link
+         bar: a modal dialog blocks the page and throws away the composer's
+         selection. */}}
+    <div class="assist-bar" data-assist-bar hidden>
+      <label for="assist-prompt" data-assist-label>What should this message say?</label>
+      <input id="assist-prompt" type="text" data-assist-prompt autocomplete="off"
+             placeholder="ask them to move Thursday's meeting to Friday morning">
+      {{/* hx-post, with the computed values added in htmx:configRequest rather
+           than by hx-vals="js:...".
+
+           **This app's CSP has no 'unsafe-eval', and htmx compiles a js: value
+           with new Function.** It would have been refused by the browser and
+           the request would have gone out with none of the values in it --
+           silently, because a blocked eval is a console line nobody is
+           watching. The event is the documented way to do this under a CSP
+           worth having, and the CSP is right.
+
+           The three cannot be form fields anyway: `quoted` is whichever of the
+           two editors is visible, and `recipients` is a COUNT of To and Cc --
+           never the addresses, because the model needs to know whether this is
+           a person or a room and nothing more.
+
+           hx-swap="none": the answer is text for a rich-text surface that
+           already holds a quote, so where it lands is the editor's business.
+           See initComposer. */}}
+      <button type="button" class="btn btn-primary" data-assist-go
+              hx-post="/app/compose/assist"
+              hx-include="[name=subject]"
+              hx-swap="none">Draft it</button>
+      <button type="button" class="btn" data-assist-cancel>Cancel</button>
+      <span class="assist-note" data-assist-note></span>
+    </div>
+
+    {{/* Both bodies are always in the document, and the format switch shows
+         one and hides the other. Keeping the hidden one alive is what lets
+         somebody switch to HTML, change their mind, and find their text still
+         there -- and it is why Draft carries two body fields rather than one
+         reinterpreted by Format. */}}
+    <div class="compose-body" data-body-plain {{if .IsHTML}}hidden{{end}}>
+      <label class="sr-only" for="c-body">Message</label>
+      <textarea id="c-body" name="body" {{if .IsReply}}autofocus{{end}}>{{.Draft.Body}}</textarea>
+    </div>
+
+    {{/* The rich editor.
+
+         The toolbar is built here rather than in app.js so that the buttons
+         are real markup with real labels -- but every one of them is inert
+         without script, which is why the whole block is hidden until app.js
+         enables it (data-rich-editor stays `hidden` otherwise). With scripting
+         off the format switch keeps the plain body visible and the message is
+         still perfectly sendable, which is the honest degradation: a toolbar
+         of dead buttons would not be.
+
+         The buttons are type=button. A bare <button> inside a form submits
+         it, so a missing type here would mean pressing Bold sends the
+         message. */}}
+    <div class="compose-body compose-html" data-rich-editor hidden>
+      {{/* Two fixed rows rather than one row left to wrap where the pane
+           happens to end. Wrapping put the break in a different place at every
+           window width, so a control was never reliably in the same spot.
+
+           The split is by how often a control is reached for: the row nearest
+           the text is the one used while writing (weight, style, lists,
+           indent, alignment), and the row above holds the occasional ones
+           (colour, links, divider, clearing formatting).
+
+           DOM order is the row order, so tab order matches what is on screen
+           -- the reason this is two real rows and not a CSS reordering. */}}
+      <div class="rte-toolbar" role="toolbar" aria-label="Formatting" data-rte-toolbar>
+        <div class="rte-row">
+          <div class="rte-group">
+            {{/* type=color rather than a palette of our own: it is a native
+                 control, it is keyboard-operable, and it costs no markup. */}}
+            <label class="rte-colour" title="Text colour">
+              {{icon "text-colour"}}
+              <input type="color" value="#333333" data-cmd="foreColor" aria-label="Text colour">
+            </label>
+            <label class="rte-colour" title="Highlight">
+              {{icon "highlight"}}
+              <input type="color" value="#ffff00" data-cmd="hiliteColor" aria-label="Highlight colour">
+            </label>
+          </div>
+          <div class="rte-group">
+            <button type="button" class="rte-btn" data-cmd="createLink" title="Insert link" aria-label="Insert link">{{icon "link"}}</button>
+            <button type="button" class="rte-btn" data-cmd="unlink" title="Remove link" aria-label="Remove link">{{icon "unlink"}}</button>
+            <button type="button" class="rte-btn" data-cmd="insertHorizontalRule" title="Divider" aria-label="Insert divider">{{icon "hrule"}}</button>
+          </div>
+          <div class="rte-group">
+            {{/* The file input is the control; the button is what it looks
+                 like. A bare <input type=file> cannot be styled to match the
+                 toolbar, and label-wrapping it keeps it keyboard-reachable --
+                 the input is the tab stop and the CSS puts its focus ring on
+                 the button. */}}
+            <label class="rte-btn rte-file" title="Insert image" data-image-label>
+              {{icon "image"}}
+              <span class="sr-only">Insert image</span>
+              <input type="file" accept="image/*" data-image-input>
+            </label>
+            <button type="button" class="rte-btn" data-cmd="removeFormat" title="Clear formatting" aria-label="Clear formatting">{{icon "clear-format"}}</button>
+          </div>
+        </div>
+
+        <div class="rte-row">
+          <div class="rte-group">
+            <button type="button" class="rte-btn" data-cmd="bold" title="Bold (Ctrl+B)" aria-label="Bold">{{icon "bold"}}</button>
+            <button type="button" class="rte-btn" data-cmd="italic" title="Italic (Ctrl+I)" aria-label="Italic">{{icon "italic"}}</button>
+            <button type="button" class="rte-btn" data-cmd="underline" title="Underline (Ctrl+U)" aria-label="Underline">{{icon "underline"}}</button>
+            <button type="button" class="rte-btn" data-cmd="strikeThrough" title="Strikethrough" aria-label="Strikethrough">{{icon "strikethrough"}}</button>
+          </div>
+          <div class="rte-group">
+            <label class="sr-only" for="rte-block">Paragraph style</label>
+            <select class="rte-select" id="rte-block" data-cmd="formatBlock">
+              <option value="p">Normal</option>
+              <option value="h1">Heading 1</option>
+              <option value="h2">Heading 2</option>
+              <option value="h3">Heading 3</option>
+              <option value="blockquote">Quote</option>
+              <option value="pre">Code</option>
+            </select>
+          </div>
+          <div class="rte-group">
+            <button type="button" class="rte-btn" data-cmd="insertUnorderedList" title="Bulleted list" aria-label="Bulleted list">{{icon "list-bullet"}}</button>
+            <button type="button" class="rte-btn" data-cmd="insertOrderedList" title="Numbered list" aria-label="Numbered list">{{icon "list-ordered"}}</button>
+            <button type="button" class="rte-btn" data-cmd="outdent" title="Decrease indent" aria-label="Decrease indent">{{icon "outdent"}}</button>
+            <button type="button" class="rte-btn" data-cmd="indent" title="Increase indent" aria-label="Increase indent">{{icon "indent"}}</button>
+          </div>
+          <div class="rte-group">
+            <button type="button" class="rte-btn" data-cmd="justifyLeft" title="Align left" aria-label="Align left">{{icon "align-left"}}</button>
+            <button type="button" class="rte-btn" data-cmd="justifyCenter" title="Centre" aria-label="Centre">{{icon "align-center"}}</button>
+            <button type="button" class="rte-btn" data-cmd="justifyRight" title="Align right" aria-label="Align right">{{icon "align-right"}}</button>
+          </div>
+        </div>
+
+        {{/* The image row. Hidden until a picture in the message is selected,
+             then it replaces nothing -- it appears below the other two, so the
+             controls that were there do not move under the pointer.
+
+             The percentages are of the email page width, not of the picture:
+             100% is a full-width image whatever the original happened to be,
+             which is the number that means something to somebody laying out a
+             message. */}}
+        <div class="rte-row rte-image-row" data-image-row hidden>
+          <span class="rte-label">Image width</span>
+          <div class="rte-group">
+            <button type="button" class="rte-btn" data-image-size="25">25%</button>
+            <button type="button" class="rte-btn" data-image-size="50">50%</button>
+            <button type="button" class="rte-btn" data-image-size="75">75%</button>
+            <button type="button" class="rte-btn" data-image-size="100">100%</button>
+          </div>
+          <span class="rte-note" data-image-note></span>
+        </div>
+      </div>
+
+      {{/* The link bar, rather than a prompt(). A modal dialog blocks the page
+           and throws away the selection it was opened to act on; this keeps
+           the selection (app.js saves the range) and is an ordinary field
+           people can paste into. */}}
+      <div class="rte-linkbar" data-rte-linkbar hidden>
+        <label for="rte-url">Link address</label>
+        <input type="url" id="rte-url" placeholder="https://example.com"
+               autocomplete="off" data-rte-url>
+        <button type="button" class="btn" data-rte-link-apply>Apply</button>
+        <button type="button" class="btn" data-rte-link-cancel>Cancel</button>
+      </div>
+
+      {{/* aria-multiline and role=textbox so this announces as what it is;
+           a contenteditable div is otherwise read as a group of paragraphs. */}}
+      <div class="rte-surface" contenteditable="true" role="textbox"
+           aria-multiline="true" aria-label="Message" spellcheck="true"
+           data-rte-surface>{{.EditorHTML}}</div>
+    </div>
+  </form>
+  {{end}}
+  </main>
+</div>
+{{end}}
+
+
+{{/* The attachment strip, rendered whole by the server every time it changes.
+     Dot is an attachStripVM.
+
+     **The server owns this element, not the page.** Uploading and removing
+     both post the ids currently in the form and get the entire strip back, so
+     ordering, the empty state and the note are decided in one place from one
+     source. It was built the other way first -- the endpoints answered JSON
+     and app.js assembled the row, kept the strip's `hidden` in step and
+     duplicated the row markup in DOM calls -- which is two descriptions of the
+     same thing, and the copy nobody re-reads is the one that drifts.
+
+     Each row's hidden input IS the attachment: it is what the send posts, what
+     the autosave's FormData picks up, and what a refused send re-renders. */}}
+{{define "attachStrip"}}
+<div class="compose-attachments" id="attach-strip" data-attach-strip
+     {{if and (not .Attachments) (not .Note)}}hidden{{end}}>
+  <ul class="attach-list" data-attach-list>
+    {{range .Attachments}}
+    <li class="attach-item">
+      <input type="hidden" name="attach" value="{{.ID}}">
+      <span class="attach-icon">{{icon "attach"}}</span>
+      <span class="attach-name" title="{{.Name}}">{{.Name}}</span>
+      <span class="attach-size">{{.Size}}</span>
+      {{/* hx-include picks up every attach input in the form, so the server
+           is told which rows remain and answers with the strip without this
+           one. No client-side removal, and therefore no way for the strip and
+           the store to disagree. */}}
+      <button type="button" class="attach-remove"
+              hx-post="/app/compose/attach/remove"
+              hx-vals='{"id": "{{.ID}}"}'
+              hx-include="[name='attach']"
+              hx-target="#attach-strip" hx-swap="outerHTML"
+              title="Remove" aria-label="Remove {{.Name}}">{{icon "close"}}</button>
+    </li>
+    {{end}}
+  </ul>
+  <span class="attach-note{{if .NoteIsError}} is-error{{end}}" data-attach-note>{{.Note}}</span>
+</div>
+{{end}}

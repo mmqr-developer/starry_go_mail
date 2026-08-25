@@ -1,0 +1,133 @@
+# starry_go_mail. See Docker.How.To.
+#
+#   PEPPER="$(cat pepper.txt)" docker compose build
+#   docker compose up -d
+#
+# No `version:` key -- Compose v2 ignores it and warns.
+
+services:
+  starry_go_mail:
+    build:
+      context: .
+      args:
+        # Empty unless PEPPER is exported. A pepper that disagrees with the one
+        # that wrote the data makes every stored mail password and TOTP secret
+        # undecryptable. Do not put it in a .env file that gets committed.
+        PEPPER: "${PEPPER:-}"
+    image: starry_go_mail
+
+    # The container is named outright, so it is starry_go_mail in `docker ps`
+    # and `docker stats` rather than <project>-<service>-1 -- where <project>
+    # is whatever the directory happens to be called on the host, which is a
+    # detail of where somebody cloned this and not something worth reading in
+    # a process list.
+    #
+    # The cost is that this service cannot be scaled past one replica: two
+    # containers cannot share a name. That is not a limit here -- they would
+    # share one SQLite file and one /config, which is not something to run two
+    # of. Remove this line if that ever stops being true.
+    container_name: starry_go_mail
+
+    restart: unless-stopped
+
+    ports:
+      # Bound to loopback ON THE DOCKER HOST, so nothing outside that machine
+      # can reach the container directly. Two reasons, and the second is the
+      # one that bites:
+      #
+      #   This server speaks plain HTTP and has no TLS of its own. Published
+      #   openly, every password and session cookie crosses the network in the
+      #   clear.
+      #
+      #   trusted_proxies ships trusting the private ranges, so a forwarded
+      #   X-Forwarded-For is believed. That is safe only while the port is
+      #   unreachable except through your proxy -- open it up and a stranger
+      #   can claim any address, including one your superuser_ip_allowed
+      #   permits.
+      #
+      # So the intended shape is a reverse proxy on this host terminating TLS
+      # and forwarding to 127.0.0.1:8080.
+      #
+      # **This makes the app unreachable from other machines until that proxy
+      # exists.** If you are reaching it directly from a browser elsewhere --
+      # no proxy in front -- change this back to "8080:8080" and empty
+      # trusted_proxies, so no forwarded header is believed from anybody:
+      #
+      #   - "8080:8080"
+      #
+      # Change the left-hand 8080 to move the host port; the right-hand one is
+      # inside the container and matches `listen` in mail_client.json.
+      - "127.0.0.1:8080:8080"
+
+    volumes:
+      # see volumes: and config: down below
+      - config:/config
+
+    tmpfs:
+      # Uploads over 8MB spill out of memory into os.TempDir(), and a scratch
+      # image has no /tmp -- attaching a large file would fail with a temp-file
+      # error. Sized to hold one upload comfortably.
+      - /tmp:size=64m
+
+    environment:
+      # Zone data is in the image, so timestamps can render as something other
+      # than UTC.
+      TZ: UTC
+
+    # Everything written goes to the volume or the tmpfs above.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+
+    # No healthcheck. The image is scratch: no shell for CMD-SHELL, and no curl
+    # or wget for CMD. GET /healthz exists (200, pings the database) but has to
+    # be probed from outside the container.
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  # The named volume the service mounts. Left as-is, Docker manages it and puts
+  # the data under /var/lib/docker/volumes/<project>_config/_data.
+  #
+  # To keep the name "config" but have it live in a directory YOU choose,
+  # uncomment the block below and set "device". The service line stays
+  # "config:/config" -- nothing there changes.
+  #
+  #   config:
+  #     driver: local
+  #     driver_opts:
+  #       type: none
+  #       o: bind
+  #       device: /srv/mailclient        # absolute; no ~ and no variables
+  #
+  # Three things about that:
+  #
+  #   1. The directory must already exist. Docker will not create it and the
+  #      container fails to start with "no such file or directory" -- unlike a
+  #      bind mount in the service, which Docker creates silently.
+  #        mkdir -p /srv/mailclient
+  #
+  #   2. It is read ONCE, when the volume is first created. Editing device
+  #      later does nothing at all: Compose sees a volume of that name and
+  #      reuses it, pointing at the old location while this file claims
+  #      otherwise. To change it, move the data yourself first, then:
+  #        docker compose down
+  #        docker volume rm go_htmx_mail_client_config
+  #        docker compose up -d
+  #
+  #   3. Nothing is copied. A new location starts empty, which for this app
+  #      means a first run writing a fresh mail_client.json with new keys and
+  #      no superuser -- a server nobody can sign in to, and the old database
+  #      still sitting where it was.
+  #
+  # The simpler alternative, if you do not need the name: replace the service's
+  # "config:/config" with a path. Compose tells a path from a volume name by the
+  # "/" or "./" in it, and it creates the directory for you.
+  #
+  #   - ./config:/config          relative to this file
+  #   - /srv/mailclient:/config   absolute
+  config:

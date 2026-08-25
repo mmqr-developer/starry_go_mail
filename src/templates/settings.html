@@ -1,0 +1,1200 @@
+{{define "settings"}}
+{{/* Settings takes the whole window rather than sitting in the third column.
+     It is a place you go to and come back from, not a pane you work beside --
+     and the sidebar's folder list is noise while you are editing folders in
+     the middle of the screen. The header is what makes it a place you can
+     leave: without a Close button, a full-screen page with no surrounding
+     chrome has no obvious way out but the browser's back button. */}}
+<div id="app-body" class="settings-screen">
+  <header class="settings-head">
+    <h1>Settings</h1>
+    <span class="settings-head-gap"></span>
+    <a hx-boost="true" class="btn btn-primary settings-close" href="/app/mailbox?folder=INBOX">
+      {{icon "close"}} Close settings
+    </a>
+  </header>
+
+  <main id="main-content" tabindex="-1" class="settings-pane">
+    <div class="settings-inner">
+
+      {{with .Settings}}
+        {{if .Flash}}<div class="alert alert-ok">{{.Flash}}</div>{{end}}
+        {{if .Error}}<div class="alert">{{.Error}}</div>{{end}}
+      {{end}}
+
+      {{/* The section menu. Each screen has its own URL rather than a tab
+           parameter, so the browser's back button moves between them the way
+           it does everywhere else in this app. */}}
+      <div class="settings-frame">
+      <nav class="settings-nav" aria-label="Settings sections">
+        {{$cur := "general"}}{{with .Settings}}{{if .Section}}{{$cur = .Section}}{{end}}{{end}}
+        {{range settingsSections}}
+          {{/* One question, asked in Go: is this section about the kind of
+               account this session is not, or about a feature the superuser
+               has switched off. See PageData.OffersSection -- the router asks
+               the same function, so the menu cannot offer a link that the
+               router then refuses. */}}
+          {{if $.OffersSection .}}
+          <a class="settings-nav-item{{if eq $cur .Key}} is-on{{end}}"
+             href="/app/settings/{{.Key}}"
+             {{if eq $cur .Key}}aria-current="page"{{end}}>
+            <span class="settings-nav-label">{{.Label}}</span>
+            <span class="settings-nav-desc">{{.Description}}</span>
+          </a>
+          {{end}}
+        {{end}}
+      </nav>
+
+      <div class="settings-body">
+
+      {{if .Settings.SectionIs "general"}}
+      {{with .Settings}}
+      <div class="card">
+        <h2>General</h2>
+        <p class="sub" style="margin-top:0">How this mailbox behaves. These are the
+          deployment's settings rather than one person's — see the note under Identity.</p>
+        <form method="POST" action="/app/settings/general">
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="g-lang">Language</label>
+              <select id="g-lang" name="language">
+                <option value="en" selected>English</option>
+              </select>
+              <div class="hint">The only option today. Every visible string in this app is an
+                English literal in a template; a second language means replacing each with a
+                lookup key and shipping a translation file. See the TODO in
+                <code>settings.go</code>.</div>
+            </div>
+            <div class="field">
+              <label for="g-date">Date format</label>
+              {{$df := index .Prefs "date_format"}}
+              <select id="g-date" name="date_format">
+                {{range dateFormats}}
+                <option value="{{.Key}}" {{if eq .Key $df}}selected{{end}}>{{.Label}}</option>
+                {{end}}
+              </select>
+              <div class="hint">Used in the message list and the reader.</div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="g-per-page">Messages per page</label>
+              {{$pp := index .Prefs "messages_per_page"}}
+              <select id="g-per-page" name="messages_per_page">
+                {{range $v := list "20" "50" "100" "200"}}
+                <option value="{{$v}}" {{if eq $v $pp}}selected{{end}}>{{$v}}</option>
+                {{end}}
+                {{/* A value set elsewhere -- the admin panel takes any number
+                     between 10 and 200 -- stays selectable rather than being
+                     silently changed to 20 by opening this page. */}}
+                {{if not (contains (list "20" "50" "100" "200") $pp)}}
+                <option value="{{$pp}}" selected>{{$pp}}</option>
+                {{end}}
+              </select>
+            </div>
+            <div class="field">
+              <label for="g-check">Check for new mail every</label>
+              {{$ci := index .Prefs "check_interval"}}
+              <select id="g-check" name="check_interval_seconds">
+                {{range $v := list "30" "60" "120" "300" "600" "900" "1800"}}
+                <option value="{{$v}}" {{if eq $v $ci}}selected{{end}}>{{$v}} seconds</option>
+                {{end}}
+              </select>
+              <div class="hint">The open message list reloads itself on this interval.
+                 A value below the deployment minimum is raised to it.</div>
+            </div>
+          </div>
+
+          {{/* Only where there is a choice. One assistant needs no picker, and
+               a deployment with none has no row here at all -- the handler
+               leaves .Assistants empty and this disappears. */}}
+          {{if .Assistants}}
+          <div class="field">
+            <label for="g-assistant">Write and scan with</label>
+            <select id="g-assistant" name="assistant_provider">
+              {{range .Assistants}}
+              <option value="{{.Provider}}" {{if eq .Provider $.Settings.Assistant}}selected{{end}}>
+                {{.Label}} — {{.Model}}
+              </option>
+              {{end}}
+            </select>
+            <div class="hint">Which assistant drafts your messages and reads your
+              Sent mail. <strong>Ollama runs on a machine your administrator
+              controls; Claude sends the text to Anthropic.</strong> If the one
+              chosen stops being available, the other is used instead.</div>
+          </div>
+          {{end}}
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="g-markdelay">Mark a message read after</label>
+              {{$mr := index .Prefs "mark_read_seconds"}}
+              <select id="g-markdelay" name="mark_read_seconds">
+                {{range $v := list "5" "10" "30" "60"}}
+                <option value="{{$v}}" {{if eq $v $mr}}selected{{end}}>{{$v}} seconds</option>
+                {{end}}
+                <option value="0" {{if eq $mr "0"}}selected{{end}}>Immediately</option>
+              </select>
+              <div class="hint">Only applies while <em>mark read on open</em> below is on.</div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="g-view">A message opens as</label>
+              <select id="g-view" name="default_view">
+                {{$v := index .Prefs "default_view"}}
+                <option value="plain" {{if eq $v "plain"}}selected{{end}}>Plain text</option>
+                <option value="html" {{if eq $v "html"}}selected{{end}}>Plain HTML, no images</option>
+                <option value="html-inline" {{if eq $v "html-inline"}}selected{{end}}>HTML with embedded images</option>
+                <option value="html-remote" {{if eq $v "html-remote"}}selected{{end}}>HTML with all images</option>
+              </select>
+              <div class="hint">Plain text is the safe default: it cannot lay itself out or
+                fetch anything. The reader can climb a rung per message.</div>
+            </div>
+            <div class="field">
+              <label for="g-format">New messages start as</label>
+              <select id="g-format" name="compose_format">
+                {{$f := index .Prefs "compose_format"}}
+                <option value="plain" {{if eq $f "plain"}}selected{{end}}>Plain text</option>
+                <option value="html" {{if eq $f "html"}}selected{{end}}>HTML</option>
+              </select>
+              <div class="hint">The composer's own switch overrides this per message.</div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="g-markread">
+              <input id="g-markread" type="checkbox" name="mark_read_on_open" value="1"
+                     {{if index .Prefs "mark_read_on_open"}}checked{{end}}>
+              Mark a message read when it is opened
+            </label>
+          </div>
+          <div class="field">
+            <label for="g-stripcolor">
+              <input id="g-stripcolor" type="checkbox" name="strip_colors" value="1"
+                     {{if index .Prefs "strip_colors"}}checked{{end}}>
+              Remove background and text colours in Plain HTML
+            </label>
+            <div class="hint">Drops the sender's colours on the HTML rung. A message written
+              for a dark theme is otherwise pale grey on white here, and one with
+              white-on-white styling is invisible.</div>
+          </div>
+          <div class="field">
+            <label for="g-remote">
+              <input id="g-remote" type="checkbox" name="block_remote_images" value="1"
+                     {{if index .Prefs "block_remote_images"}}checked{{end}}>
+              Block remote images by default
+            </label>
+            <div class="hint">A remote image tells the sender the message was opened, by whom
+              and roughly where. With this on, "HTML with all images" is capped to embedded
+              ones until you ask per message.</div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Save</button>
+        </form>
+      </div>
+      {{end}}
+      {{end}}
+
+      {{if .Settings.SectionIs "identity"}}
+      {{with .Settings}}
+      <div class="card">
+        <h2>Identity</h2>
+        <form method="POST" action="/app/settings/identity">
+          <div class="grid-2">
+            <div class="field">
+              <label for="i-name">Your name</label>
+              <input id="i-name" name="display_name" type="text" autocomplete="name"
+                     value="{{.Identity.DisplayName}}" placeholder="Shown as the sender">
+              <div class="hint">Blank sends the address on its own.</div>
+            </div>
+            <div class="field">
+              <label for="i-replyto">Reply-To <span class="hint">(optional)</span></label>
+              <input id="i-replyto" name="reply_to" type="email" autocomplete="off"
+                     value="{{.Identity.ReplyTo}}">
+              <div class="hint">Where replies should go, if not to the address you send from.</div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="i-sig">Signature</label>
+            <textarea id="i-sig" name="signature" rows="12"
+                      placeholder="-- &#10;Your name">{{.Identity.Signature}}</textarea>
+          </div>
+          <div class="field">
+            <label for="i-usesig">
+              <input id="i-usesig" type="checkbox" name="use_signature" value="1"
+                     {{if .Identity.UseSignature}}checked{{end}}>
+              Add the signature to new messages
+            </label>
+            <div class="hint">It is inserted when the composer opens, so it can be edited or
+              deleted before sending like any other text.</div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Save</button>
+        </form>
+        <p class="sub">This identity belongs to the deployment rather than to one person.
+          The settings store has one row per key with nowhere to hang a user id, and under
+          <code>-imap</code> there is no user record to hang it on — the session is the
+          mailbox. On a single-mailbox install the two are the same thing.</p>
+      </div>
+      {{end}}
+      {{end}}
+
+      {{if .Settings.SectionIs "contacts"}}
+      {{with .Settings}}
+      <div class="card">
+        <h2>Contacts</h2>
+        <p class="sub" style="margin-top:0">Learned from your <strong>Sent</strong> folder the
+          first time you sign in — everybody you have written to. You can add and edit entries
+          here too.</p>
+
+        <form method="POST" action="/app/settings/contacts/save" class="contact-add">
+          <div class="grid-2">
+            <div class="field">
+              <label for="c-name">Name <span class="hint">(optional)</span></label>
+              <input id="c-name" name="display_name" type="text" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="c-email">Email address</label>
+              <input id="c-email" name="email" type="email" required autocomplete="off">
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary">Add or update</button>
+          <span class="hint">Adding an address you removed earlier puts it back.</span>
+        </form>
+
+        {{if .Contacts}}
+        <div class="folder-table-wrap">
+        <table class="folder-table contact-table">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Address</th>
+              <th scope="col">Source</th>
+              <th scope="col">PGP key</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Contacts}}
+            {{/* Removed entries stay on the screen, greyed. Hiding them would
+                 mean a contact the user removed is invisible *and*
+                 unrecoverable -- the scrape will not bring it back, so the
+                 only route would be writing to that person again. */}}
+            <tr {{if .Deleted}}class="is-removed"{{end}}>
+              <td>{{.DisplayName}}</td>
+              <td>{{.Email}}{{if .Deleted}} <span class="badge">removed</span>{{end}}</td>
+              <td><span class="hint">{{.Source}}</span></td>
+              <td>
+                {{/* One key per person. The fingerprint is shown because that
+                     is what you compare against what they told you over a
+                     channel an attacker does not control -- the key itself
+                     proves only that somebody holds the private half. */}}
+                {{if .HasKey}}
+                  <details class="key-cell">
+                    <summary><span class="badge">{{.KeySource}}</span> key</summary>
+                    <div class="hint mono">{{.KeyInfo}}</div>
+                    <form method="POST" action="/app/settings/contacts/key" class="key-form">
+                      <input type="hidden" name="email" value="{{.Email}}">
+                      <label class="sr-only" for="k-{{.Email}}">Public key for {{.Email}}</label>
+                      <textarea id="k-{{.Email}}" name="public_key" rows="5"
+                                class="mono" spellcheck="false">{{.PublicKey}}</textarea>
+                      <button type="submit" class="btn">Save key</button>
+                      <button type="submit" class="btn btn-danger" name="public_key" value=""
+                              formnovalidate>Remove key</button>
+                    </form>
+                  </details>
+                {{else}}
+                  <details class="key-cell">
+                    <summary class="hint">none</summary>
+                    <form method="POST" action="/app/settings/contacts/key" class="key-form">
+                      <input type="hidden" name="email" value="{{.Email}}">
+                      <label class="sr-only" for="k-{{.Email}}">Public key for {{.Email}}</label>
+                      <textarea id="k-{{.Email}}" name="public_key" rows="5" class="mono"
+                                spellcheck="false"
+                                placeholder="-----BEGIN PGP PUBLIC KEY BLOCK-----"></textarea>
+                      <button type="submit" class="btn">Save key</button>
+                    </form>
+                  </details>
+                {{end}}
+              </td>
+              <td class="folder-actions">
+                {{if .Deleted}}
+                <form method="POST" action="/app/settings/contacts/restore" class="inline-form">
+                  <input type="hidden" name="email" value="{{.Email}}">
+                  <button type="submit" class="btn">Add back</button>
+                </form>
+                {{else}}
+                <form method="POST" action="/app/settings/contacts/save" class="inline-form">
+                  <input type="hidden" name="email" value="{{.Email}}">
+                  <label class="sr-only" for="cn-{{.Email}}">Name for {{.Email}}</label>
+                  <input id="cn-{{.Email}}" name="display_name" type="text"
+                         value="{{.DisplayName}}" class="rename-input" autocomplete="off">
+                  <button type="submit" class="btn">Save</button>
+                </form>
+                <form method="POST" action="/app/settings/contacts/remove" class="inline-form"
+                      data-confirm="Remove {{.Email}} from the address book? It will not be learned again.">
+                  <input type="hidden" name="email" value="{{.Email}}">
+                  <button type="submit" class="btn btn-danger">Remove</button>
+                </form>
+                {{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        </div>
+        {{else}}
+        <p class="sub">No contacts yet. They appear once a Sent folder has been read, or add
+          one above.</p>
+        {{end}}
+
+        <p class="sub"><strong>PGP keys live here now.</strong> One per person, because a key
+          belongs to somebody. A key announced in the <code>Autocrypt:</code> header of mail you
+          receive is picked up automatically and filled in where there is none — it never
+          replaces one you pasted yourself, and the header only ever speaks for the address it
+          arrived from. Compare the fingerprint against what its owner told you before trusting
+          it.</p>
+
+        <p class="sub"><strong>Removing is not deleting.</strong> The entry stays in the
+          database marked as removed, which is what stops the next read of your Sent folder
+          adding it straight back. Adding the same address by hand clears the mark.</p>
+      </div>
+      {{end}}
+      {{end}}
+
+      {{if .Settings.SectionIs "totp"}}{{template "totpCard" .Settings.TOTP}}{{end}}
+
+      {{if .Settings.SectionIs "pgp"}}
+      {{with .Settings}}
+      <div class="card">
+        <h2>Pretty Good Privacy</h2>
+
+        <p class="sub" style="margin-top:0">Keys pasted below are parsed when you save, so a
+          malformed block is refused while you are looking at it. With a private key stored
+          and PGP switched on, the composer gains <strong>Sign</strong> and
+          <strong>Encrypt</strong>, and signed or encrypted mail you receive is verified and
+          decrypted as you read it. The wire format is <strong>PGP/MIME (RFC 3156)</strong>,
+          which protects the whole message rather than just a plain-text body.</p>
+
+        <p class="sub"><strong>Encrypting needs a key for every recipient</strong>, kept on
+          their entry in <a hx-boost="true" href="/app/settings/contacts">Contacts</a> — a send is refused,
+          by name, if one of them has none, rather than quietly leaving that person out. Your
+          own public key is used too, so the copy filed in Sent is one you can still read.</p>
+
+        <p class="sub"><strong>What is deliberately not here:</strong> no keyservers and no
+          web of trust. A key is trusted because it is on a contact, and the fingerprint shown
+          beside it is what you compare against what its owner told you. Nothing else binds a
+          key to a person.</p>
+
+        <details class="pgp-explainer">
+          <summary>How OpenPGP works, briefly</summary>
+          <div class="pgp-explainer-body">
+            <p>PGP is <em>hybrid</em> cryptography: asymmetric keys to agree on a secret,
+              symmetric cryptography to move the actual bytes.</p>
+            <p>Every participant holds a <strong>key pair</strong>. The public half is handed
+              out freely; the private half never leaves its owner and is normally protected by
+              a passphrase, so the file on disk is useless on its own.</p>
+            <p>To <strong>encrypt</strong> a message, the sender generates a random
+              <em>session key</em> and encrypts the message body with it symmetrically —
+              AES-256 in practice, because asymmetric operations are far too slow for a
+              message of any size. That session key is then encrypted <em>once per
+              recipient</em> using each recipient's public key, and those small blobs travel
+              with the message. Each recipient decrypts the session key with their private key,
+              then decrypts the body with it. This is why adding a recipient does not re-encrypt
+              the body: only the session key is re-wrapped.</p>
+            <p>To <strong>sign</strong>, the sender hashes the message (SHA-256 or better) and
+              encrypts that digest with their <em>private</em> key. Anyone with the sender's
+              public key can decrypt the digest and compare it with their own hash of the
+              message. A match proves two separate things: the message was not altered, and it
+              was signed by the holder of that private key. Signing and encrypting are
+              independent — a message can be either, both, or neither.</p>
+            <p>The output is binary, so email carries it in <strong>ASCII armour</strong>: the
+              base64 blocks below, wrapped in <code>BEGIN</code>/<code>END</code> lines with a
+              CRC. In mail this appears either inline (RFC 4880 clearsigned text) or as
+              PGP/MIME parts (RFC 3156), which is the form that survives HTML and attachments.</p>
+            <p>The hard problem is <strong>not the mathematics, it is knowing whose key is
+              whose</strong>. A public key proves only that whoever holds the matching private
+              key produced the signature — not who that is. That binding comes from outside:
+              comparing <strong>fingerprints</strong> over a channel an attacker does not
+              control, the web of trust, or a keyserver you have decided to believe. This app
+              shows the fingerprint of each stored key for exactly that comparison.</p>
+          </div>
+        </details>
+
+        <form method="POST" action="/app/settings/pgp" data-pgp-form>
+
+          {{/* The master switch, right under the description, because whether
+               PGP is on at all is the first question and everything below it
+               is detail. */}}
+          <div class="switch-row">
+            <label class="switch">
+              <input type="checkbox" name="enabled" value="1" {{if .PGP.Enabled}}checked{{end}}>
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="switch-label">Use PGP for this mailbox</span>
+            </label>
+            <div class="hint">Off means nothing here is consulted: the composer offers no
+              Sign or Encrypt, and an encrypted message that arrives stays unopened. On does
+              not encrypt anything by itself — each message is signed or encrypted only when
+              you tick the box for it.</div>
+          </div>
+
+          {{/* Making a key, for somebody who has not got one. formaction rather
+               than a second form, because forms cannot nest -- the same trick
+               the composer uses for Save draft.
+
+               No confirmation here: the handler refuses outright when a key is
+               already stored, which is stronger than a dialog. Replacing a
+               private key is the permanent loss of every message encrypted to
+               it, and that is not something to guard with a prompt people
+               click through. */}}
+          <div class="field generate-row">
+            <button type="submit" class="btn" formnovalidate
+                    formaction="/app/settings/pgp/generate">{{icon "shield"}} Generate PGP keys</button>
+            <input type="password" name="passphrase" class="gen-pass" autocomplete="new-password"
+                   placeholder="Passphrase for the new key (optional)">
+            <div class="hint">Makes a Curve25519 pair for
+              <strong>{{if $.Account}}{{$.Account.Email}}{{else}}this mailbox{{end}}</strong>
+              and fills in both boxes below. A passphrase is worth setting and cannot be added
+              later here — without one, anybody who gets both the database and
+              <code>secret_key</code> has a usable key. This app never stores it.</div>
+          </div>
+
+          <div class="field">
+            <label for="pgp-pub">Your public key</label>
+            <textarea id="pgp-pub" name="public_key" rows="8" spellcheck="false"
+                      class="mono" placeholder="-----BEGIN PGP PUBLIC KEY BLOCK-----">{{.PGP.PublicKey}}</textarea>
+            {{if .PGP.PublicInfo}}<div class="hint mono">{{.PGP.PublicInfo}}</div>{{end}}
+            <div class="hint">The half you hand out. Give this to people who write to you.</div>
+          </div>
+
+          {{/* Where the private key lives, immediately above the box it is
+               about -- the choice changes what pasting into that box does, so
+               it has to be made before, not after. */}}
+          <div class="switch-row">
+            <label class="switch">
+              <input type="checkbox" name="key_storage" value="browser"
+                     data-pgp-storage {{if .PGP.StoresInBrowser}}checked{{end}}>
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="switch-label">Keep my private key in this browser only</span>
+            </label>
+            <div class="hint">
+              <strong>Off (the default):</strong> the key is stored on this server, encrypted,
+              and is there from any browser on any machine.<br>
+              <strong>On:</strong> the key is kept in this browser's local storage and the
+              server keeps no copy. <strong>You will not be able to sign or decrypt on a
+              different computer</strong>, or in a different browser, or after clearing your
+              browsing data — and there is no recovery from here, because the server does not
+              have it.
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="pgp-priv">Your private key</label>
+            <textarea id="pgp-priv" name="private_key" rows="8" spellcheck="false"
+                      class="mono" data-pgp-private
+                      placeholder="-----BEGIN PGP PRIVATE KEY BLOCK-----"></textarea>
+            {{/* Never pre-filled, in either mode. Rendering a private key into
+                 HTML would put it in every cache, every view-source and every
+                 screenshot -- which is the whole thing encrypting it is meant
+                 to avoid. Blank means "leave it as it is". */}}
+            {{if .PGP.HasPrivateKey}}
+              <div class="hint mono">{{.PGP.PrivateInfo}}</div>
+              <div class="hint">A key is stored. Leave this box empty to keep it, paste a new
+                one to replace it, or
+                <label class="inline-check"><input type="checkbox" name="clear_private_key" value="1"> remove it</label>.</div>
+            {{else}}
+              <div class="hint" data-pgp-local-status>No key is stored on the server.</div>
+            {{end}}
+            <div class="hint"><strong>Paste a passphrase-protected key.</strong> It is
+              encrypted with this server's <code>secret_key</code> before it is stored or
+              handed back to your browser, so neither copy is readable on its own — but
+              <code>secret_key</code> sits in the config file beside the database, so that
+              protects a stray copy rather than somebody who has the server. With a passphrase
+              on the key, what is held here is useless without something this app never sees.
+              <br>Note that browser storage still means the key is <em>sent</em> here to be
+              encrypted — your browser has no access to <code>secret_key</code> and must not.
+              It means the server does not <em>keep</em> it.</div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Save</button>
+        </form>
+
+        <p class="sub"><strong>Recipients' keys have moved.</strong> Other people's public keys
+          now live on their entry in <a hx-boost="true" href="/app/settings/contacts">Contacts</a>, one key per
+          person — a key belongs to somebody, and a single box of them could not say whose was
+          whose or which one had been checked. Keys announced in the
+          <code>Autocrypt:</code> header of mail you receive are picked up automatically and
+          filled into a contact that has none.</p>
+      </div>
+      {{end}}
+      {{end}}
+
+      {{if .Settings.SectionIs "folders"}}
+      {{with .Settings}}
+      <div class="card">
+        <h2>Folders</h2>
+        <p class="sub" style="margin-top:0">Every folder on the server, including any you have
+          hidden. Hiding a folder removes it from the list on the left and changes nothing about
+          the mail inside it.</p>
+
+        {{/* The same dialog the sidebar opens, reached by the same checkbox --
+             it lives in the sidebar template, which is not on this screen, so
+             this is a link to the mailbox with the dialog asked for rather
+             than a second copy of the form. */}}
+        <p><a hx-boost="true" class="btn btn-primary" href="/app/mailbox?folder=INBOX&amp;newfolder=1">
+          {{icon "folder-plus"}} New folder</a></p>
+
+        {{if .AllFolders}}
+        <div class="folder-table-wrap">
+        <table class="folder-table">
+          <thead>
+            <tr>
+              <th scope="col">Folder</th>
+              <th scope="col">Role</th>
+              <th scope="col" class="num">Messages</th>
+              <th scope="col">Shown</th>
+              <th scope="col"><span class="sr-only">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .AllFolders}}
+            <tr>
+              <td>
+                <span class="folder-indent" style="{{indent .Depth}}"></span>
+                <span class="drop-icon" aria-hidden="true">{{folderIcon .}}</span>
+                {{.Display}}
+                {{if not .Selectable}}<span class="hint">(container only)</span>{{end}}
+              </td>
+              <td>{{if .Special}}<span class="badge">{{.Special}}</span>{{end}}</td>
+              <td class="num">{{if .Selectable}}{{.Total}}{{end}}</td>
+              <td>
+                {{/* One checkbox, one form, submitted on change by app.js and by
+                     the button beside it without script. INBOX is never
+                     offered: a mail client with no inbox is broken, not tidy. */}}
+                {{/* A folder with a job cannot be hidden -- the sidebar
+                     ignores the subscription for these, so offering the
+                     control would be offering one that does nothing. */}}
+                {{if .Special}}
+                  <span class="hint">always</span>
+                {{else}}
+                <form method="POST" action="/app/settings/folders/subscribe" class="inline-form">
+                  <input type="hidden" name="name" value="{{.Name}}">
+                  {{if .Subscribed}}
+                  <button type="submit" class="btn btn-link">Hide</button>
+                  {{else}}
+                  <input type="hidden" name="subscribed" value="1">
+                  <button type="submit" class="btn btn-link">Show</button>
+                  {{end}}
+                </form>
+                {{end}}
+              </td>
+              <td class="folder-actions">
+                {{/* Protected folders get no controls at all. The server
+                     refuses them anyway -- see protectedFolder -- so this is
+                     about not offering a button that cannot work. */}}
+                {{if not (protectedLeaf .Display)}}
+                <form method="POST" action="/app/settings/folders/rename" class="inline-form">
+                  <input type="hidden" name="name" value="{{.Name}}">
+                  <label class="sr-only" for="rn-{{.Name}}">New name for {{.Display}}</label>
+                  <input id="rn-{{.Name}}" name="new_name" type="text" value="{{.Display}}"
+                         maxlength="200" autocomplete="off" class="rename-input">
+                  <button type="submit" class="btn">Rename</button>
+                </form>
+                {{/* Deleting takes the messages with it and IMAP has no undo,
+                     so this is a POST behind a confirmation. The server
+                     refuses one that is doing a job -- Sent, Drafts, Trash --
+                     whatever this form says. */}}
+                <form method="POST" action="/app/settings/folders/delete" class="inline-form"
+                      data-confirm="Delete {{.Display}} and everything in it? This cannot be undone.">
+                  <input type="hidden" name="name" value="{{.Name}}">
+                  <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+                {{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        </div>
+        {{else}}
+        <p class="sub">No folders could be listed.</p>
+        {{end}}
+
+        <p class="sub">Use <strong>New folder</strong> in the left-hand column to add one.</p>
+      </div>
+      {{end}}
+      {{end}}
+
+      {{if .Settings.SectionIs "ollama"}}
+      {{with .Settings}}
+      <div class="card">
+        <h2>Ollama</h2>
+        <p class="sub" style="margin-top:0">Drafting help from a model running on your own
+          machine or network.</p>
+        {{/* The server, the model and the timeout are the superuser's: one
+             machine serves everybody here, and a model has to actually be
+             installed on it. What is left on this page is how THIS mailbox
+             wants to be written for. */}}
+        <div class="card" style="margin:0 0 12px">
+          <p class="sub" style="margin:0">
+            {{if index .Prefs "ollama_host"}}
+              Drafting is served by <code>{{index .Prefs "ollama_host"}}</code>.
+              The server, its timeout and which models may be used are set for
+              the whole deployment.
+            {{else}}
+              <strong>No drafting server is configured</strong>, so the button does
+              not appear in the composer. An administrator sets one.
+            {{end}}
+          </p>
+        </div>
+        <form method="POST" action="/app/settings/ollama">
+          <div class="field">
+            <label for="o-model">Model</label>
+            {{$model := index .Prefs "ollama_model"}}
+            {{/* Only approved models. The list is a setting rather than a live
+                 query, so this page costs no round trip and cannot offer a
+                 model nobody vetted. */}}
+            <select id="o-model" name="model">
+              <option value="">(none — drafting off for this mailbox)</option>
+              {{range .OllamaModels}}
+              <option value="{{.}}" {{if eq . $model}}selected{{end}}>{{.}}</option>
+              {{end}}
+              {{/* A model chosen before its approval was withdrawn stays
+                   visible and selected, so the screen says what happened
+                   rather than silently showing "none". */}}
+              {{if and $model (not (contains .OllamaModels $model))}}
+              <option value="{{$model}}" selected>{{$model}} — no longer approved</option>
+              {{end}}
+            </select>
+            <div class="hint">
+              {{if .OllamaError}}<span class="hint-error">{{.OllamaError}}</span>
+              {{else}}Chosen from the models an administrator has approved.{{end}}
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="o-temp">Temperature</label>
+              <input id="o-temp" name="temperature" type="text" autocomplete="off"
+                     value="{{index .Prefs "ollama_temperature"}}" placeholder="0.7">
+              <div class="hint">0 is literal and repetitive, 1 is loose.</div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="o-style">House style <span class="hint">(optional)</span></label>
+            <textarea id="o-style" name="style" rows="4"
+                      placeholder="British spelling. No exclamation marks. Keep it under five sentences.">{{index .Prefs "ollama_style"}}</textarea>
+            <div class="hint">Added to the standing instruction, and wins where the two disagree.</div>
+          </div>
+
+          <div class="field">
+            <label for="o-prompt">System prompt</label>
+            <textarea id="o-prompt" name="prompt" rows="14" spellcheck="false"
+                      placeholder="{{index .Prefs "ollama_prompt_default"}}">{{index .Prefs "ollama_prompt"}}</textarea>
+            <div class="hint">The standing instruction sent with every request. Leave it blank
+              to use the built-in one, shown greyed above as the placeholder — it is written to
+              stop a small model producing a wall of <code>[PLACEHOLDER]</code> brackets and a
+              preamble about what it is about to write. <strong>Work in progress:</strong> this
+              is the knob for tuning that.</div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Save</button>
+        </form>
+
+        <p class="sub"><strong>Where this is stored.</strong> All of it lives in the
+          <code>app_settings</code> table of the SQLite database in the config directory
+          (<code>./dev_config</code> under <code>-debug</code>, otherwise <code>/config</code>)
+          — the same file as every other setting, alongside <code>mail_client.json</code>.</p>
+
+        <p class="sub"><strong>What gets sent.</strong> Only what the draft is about: for a reply,
+          the quoted message already in the composer; for a new message, the instruction you type
+          when you press the button. No other mail is read, and nothing is sent anywhere unless
+          you press it.</p>
+      </div>
+      {{end}}
+      {{end}}
+
+      {{/* Claude: the same screen as Ollama, for the same mailbox-level
+           choices. Deliberately a copy rather than a shared partial -- the two
+           will drift (Claude has no server address, and its timeout is about a
+           network rather than a graphics card), and a partial with two flags
+           in it is harder to read than two screens that each say one thing. */}}
+      {{if .Settings.SectionIs "claude"}}
+      {{with .Settings}}
+      <div class="card">
+        <h2>Claude</h2>
+        <p class="sub" style="margin-top:0">Drafting help from Anthropic's models.</p>
+        <div class="card" style="margin:0 0 12px">
+          <p class="sub" style="margin:0">
+            The API key, the timeout and which models may be used are set for the
+            whole deployment. <strong>Requests leave this server</strong> — unlike
+            Ollama, which talks to a machine your administrator runs, this sends
+            the text of the draft to Anthropic.
+          </p>
+        </div>
+        <form method="POST" action="/app/settings/claude">
+          <div class="field">
+            <label for="c-model">Model</label>
+            {{$model := index .Prefs "claude_model"}}
+            <select id="c-model" name="model">
+              <option value="">(none — drafting off for this mailbox)</option>
+              {{range .ClaudeModels}}
+              <option value="{{.}}" {{if eq . $model}}selected{{end}}>{{.}}</option>
+              {{end}}
+              {{/* A model chosen before its approval was withdrawn stays
+                   visible and selected, so the screen says what happened
+                   rather than silently showing "none". */}}
+              {{if and $model (not (contains .ClaudeModels $model))}}
+              <option value="{{$model}}" selected>{{$model}} — no longer approved</option>
+              {{end}}
+            </select>
+            <div class="hint">
+              {{if .ClaudeError}}<span class="hint-error">{{.ClaudeError}}</span>
+              {{else}}Chosen from the models an administrator has approved.{{end}}
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="c-temp">Temperature</label>
+              <input id="c-temp" name="temperature" type="text" autocomplete="off"
+                     value="{{index .Prefs "claude_temperature"}}" placeholder="0.7">
+              <div class="hint">0 is literal and repetitive, 1 is loose.</div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="c-style">House style <span class="hint">(optional)</span></label>
+            <textarea id="c-style" name="style" rows="4"
+                      placeholder="British spelling. No exclamation marks. Keep it under five sentences.">{{index .Prefs "claude_style"}}</textarea>
+            <div class="hint">Added to the standing instruction, and wins where the two disagree.</div>
+          </div>
+
+          <div class="field">
+            <label for="c-prompt">System prompt</label>
+            <textarea id="c-prompt" name="prompt" rows="14" spellcheck="false"
+                      placeholder="{{index .Prefs "claude_prompt_default"}}">{{index .Prefs "claude_prompt"}}</textarea>
+            <div class="hint">The standing instruction sent with every request. Leave it blank
+              to use the built-in one, shown greyed above as the placeholder.</div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">Save</button>
+        </form>
+
+        <p class="sub"><strong>Where this is stored.</strong> These choices live in the
+          <code>mailbox_settings</code> table of the SQLite database in the config directory.
+          The API key does not: it is in <code>mail_client.json</code>, is never shown here,
+          and cannot be set from any screen in this app.</p>
+
+        <p class="sub"><strong>What gets sent.</strong> Only what the draft is about: for a reply,
+          the quoted message already in the composer; for a new message, the instruction you type
+          when you press the button. No other mail is read, and nothing is sent unless you
+          press it.</p>
+      </div>
+      {{end}}
+      {{end}}
+
+      {{/* Ollama Scan: the Sent folder, and what a scan has found in it.
+
+           Step one is this screen. It lists the mail the scan will work
+           through -- date and recipient, which is what identifies a sent
+           message to the person who sent it -- and offers the button that
+           starts one. The scan itself, the questions and answers it extracts
+           and the per-mailbox database they live in are not built yet, and
+           the button says so rather than appearing to work. */}}
+      {{if .Settings.ScanProvider}}
+      {{$scanBase := .Settings.ScanBase}}
+      <div class="card">
+        <h2>{{.Settings.ScanLabel}} Scan</h2>
+        <p class="sub" style="margin-top:0">
+          Reads your sent mail and pulls out the questions and answers in it,
+          quoted as written. Each mailbox keeps its own store per assistant, so
+          this one is about
+          <strong class="mono">{{if .Account}}{{.Account.Email}}{{else}}this mailbox{{end}}</strong>
+          read by <strong>{{.Settings.ScanLabel}}</strong>{{with .Settings.Scan.Model}}
+          (<span class="mono">{{.}}</span>){{end}} — and nothing else. The other
+          assistant's scan is a separate page with a separate database, so the
+          two can be compared.
+        </p>
+
+        <form method="POST" action="{{$scanBase}}/scan">
+          <button type="submit" class="btn btn-primary">Scan</button>
+          <span class="sub" style="margin-left:10px">
+            Scans the messages that have not been scanned before. One press
+            works for about a minute, then says what is left.
+          </span>
+        </form>
+
+        {{with .Settings.ScanCounts}}
+        <p class="sub">
+          {{.Messages}} message{{if ne .Messages 1}}s{{end}} scanned,
+          {{.Questions}} question{{if ne .Questions 1}}s{{end}} and
+          {{.Answers}} answer{{if ne .Answers 1}}s{{end}} found{{if .Failed}},
+          {{.Failed}} failed{{end}}.
+          {{/* The file and its size, because "so I can monitor the size of the
+               database" is the reason there is one per mailbox at all. */}}
+          {{if .File}}<br><code>{{.File}}</code> — {{humanSize .Size}}{{end}}
+        </p>
+        {{end}}
+
+        {{/* Two views of one subject rather than two sections in the menu:
+             the mail there is to scan, and what the scanning found. */}}
+        <p style="margin-bottom:0">
+          <a class="seg{{if .Settings.Scan.Is "sent"}} is-on{{end}}"
+             hx-boost="true" href="{{$scanBase}}">Sent mail</a>
+          <a class="seg{{if .Settings.Scan.Is "findings"}} is-on{{end}}"
+             hx-boost="true" href="{{$scanBase}}?view=findings">What it found</a>
+        </p>
+      </div>
+
+      {{if .Settings.Scan.Is "sent"}}
+      <div class="card">
+        <h2>Sent mail</h2>
+        {{if .Settings.SentFolder}}
+        <p class="sub" style="margin-top:0">
+          From <code>{{.Settings.SentFolder}}</code>{{with .Settings.Sent}}, {{.Total}} message{{if ne .Total 1}}s{{end}}{{end}}.
+        </p>
+        {{end}}
+
+        {{with .Settings.Sent}}
+        <table class="admin-table">
+          <thead><tr><th>Date</th><th>To</th><th>Scanned</th></tr></thead>
+          <tbody>
+            {{range .Messages}}
+            {{/* The store is keyed by Message-ID; the page carries UIDs, so the
+                 handler translates once and the template looks up by UID. A
+                 message that is not in the map has not been scanned, which is
+                 the ordinary case and needs no row of its own. */}}
+            {{$scan := index $.Settings.ScanState .UID}}
+            <tr>
+              <td class="hint">{{shortDate .Date}}</td>
+              <td>{{if .To}}{{.To}}{{else}}(no recipient){{end}}</td>
+              <td class="hint">
+                {{if eq $scan.Status "ok"}}
+                  {{if $scan.Found}}
+                    <a hx-boost="true"
+                       href="{{$scanBase}}?view=findings&message={{$scan.MessageID}}"
+                       >{{$scan.Found}} found</a>
+                  {{else}}nothing found{{end}}
+                {{else if eq $scan.Status "failed"}}
+                  {{/* Shown with its reason rather than as a bare "failed":
+                       the message stays recorded so it is not retried forever,
+                       so this is the only place the reason surfaces. */}}
+                  <span title="{{$scan.Error}}">failed</span>
+                {{else}}
+                  no
+                {{end}}
+              </td>
+            </tr>
+            {{else}}
+            <tr><td colspan="3" class="sub">No sent mail to scan.</td></tr>
+            {{end}}
+          </tbody>
+        </table>
+
+        {{if gt .Pages 1}}
+        <p class="sub">
+          Page {{.Page}} of {{.Pages}}
+          {{if gt .Page 1}}<a hx-boost="true" href="{{$scanBase}}?page={{sub .Page 1}}">&larr; newer</a>{{end}}
+          {{if lt .Page .Pages}}<a hx-boost="true" href="{{$scanBase}}?page={{add .Page 1}}">older &rarr;</a>{{end}}
+        </p>
+        {{end}}
+        {{end}}
+      </div>
+      {{end}}
+
+      {{if .Settings.Scan.Is "findings"}}
+      <div class="card">
+        <h2>
+          {{if .Settings.Scan.MessageID}}In &ldquo;{{.Settings.Scan.Message}}&rdquo;
+          {{else}}What it found{{end}}
+        </h2>
+
+        {{/* The filters. Links rather than a form: each one is a view of the
+             same data, so it should be a place you can be, bookmark and go
+             back to -- not the result of a submission.
+
+             Every href comes from a method rather than being assembled here.
+             See ScanReadVM.href for why: a query string built inside an
+             attribute is escaped as one value, ampersands and all, and the
+             link quietly stops working. */}}
+        {{with .Settings.Scan}}
+        <p class="sub" style="margin-top:0">
+          <a class="seg{{if .KindIs ""}} is-on{{end}}"
+             hx-boost="true" href="{{.KindHref ""}}">Both</a>
+          <a class="seg{{if .KindIs "question"}} is-on{{end}}"
+             hx-boost="true" href="{{.KindHref "question"}}">Questions</a>
+          <a class="seg{{if .KindIs "answer"}} is-on{{end}}"
+             hx-boost="true" href="{{.KindHref "answer"}}">Answers</a>
+
+          <span style="margin-left:14px">
+          <a class="seg{{if .VerbatimIs ""}} is-on{{end}}"
+             hx-boost="true" href="{{.VerbatimHref ""}}">All</a>
+          <a class="seg{{if .VerbatimIs "yes"}} is-on{{end}}"
+             hx-boost="true" href="{{.VerbatimHref "yes"}}">Quoted</a>
+          <a class="seg{{if .VerbatimIs "no"}} is-on{{end}}"
+             hx-boost="true" href="{{.VerbatimHref "no"}}">Not quoted</a>
+          </span>
+
+          {{if .MessageID}}
+          <a hx-boost="true" style="margin-left:14px"
+             href="{{.AllHref}}">&larr; everything</a>
+          {{end}}
+        </p>
+        {{end}}
+
+        <p class="sub">
+          {{.Settings.Scan.Total}} matching this filter.
+        </p>
+
+        {{with .Settings.Scan}}
+        <table class="admin-table">
+          <thead>
+            <tr><th style="width:1%">Kind</th><th>Quote</th><th style="width:22%">From the message</th></tr>
+          </thead>
+          <tbody>
+            {{range .Rows}}
+            <tr>
+              <td><span class="badge">{{.Kind}}</span></td>
+              <td>
+                {{.Text}}
+                {{if not .Verbatim}}
+                {{/* The whole reason the offset is stored. A quote that could
+                     not be found in the message it came from is the model's
+                     own words, and presenting it as something the sender wrote
+                     would be the one mistake this feature must not make. */}}
+                <br><span class="hint-error" title="This wording is not in the message -- the model rewrote it.">not in the message</span>
+                {{end}}
+              </td>
+              <td class="hint">
+                {{if .SentAt.IsZero}}(no date){{else}}{{shortDate .SentAt}}{{end}}<br>
+                {{if .Recipients}}to {{truncate .Recipients 40}}{{else}}(no recipient){{end}}<br>
+                {{if .Subject}}{{truncate .Subject 40}}{{else}}(no subject){{end}}
+              </td>
+            </tr>
+            {{else}}
+            <tr><td colspan="3" class="sub">
+              Nothing found yet. Press Scan on the Sent mail view.
+            </td></tr>
+            {{end}}
+          </tbody>
+        </table>
+
+        {{if gt .Pages 1}}
+        <p class="sub">
+          Page {{.Page}} of {{.Pages}}
+          {{if gt .Page 1}}<a hx-boost="true" href="{{.PageHref (sub .Page 1)}}">&larr; newer</a>{{end}}
+          {{if lt .Page .Pages}}<a hx-boost="true" href="{{.PageHref (add .Page 1)}}">older &rarr;</a>{{end}}
+        </p>
+        {{end}}
+        {{end}}
+      </div>
+      {{end}}
+      {{end}}
+
+      {{/* The mailbox a session is reading, read-only.
+
+           Editing moved out of Settings entirely: an application account
+           manages its mailboxes on /mailboxes, which is also where it
+           chooses which one to read. What is left here is the question
+           anybody asks when mail will not load -- which server am I
+           actually talking to -- and that is worth answering on the screen
+           somebody is already on. */}}
+      {{/* There is nothing to manage here: the mailbox IS the session, and it
+           ends when they sign out. What the page can usefully do is say so,
+           and show which server it is talking to -- the first question anyone
+           asks when mail will not load.
+
+           This lived under "mailboxes" and became unreachable when that
+           section was retired: the handler rewrote the name to general before
+           rendering, so the condition was never true and the card had not
+           appeared for some time. It has a section of its own now, offered to
+           a mailbox session and to nobody else. */}}
+      {{if .Settings.SectionIs "mailbox"}}
+      <div class="card">
+        <h2>This mailbox</h2>
+        {{with .Account}}
+        <div class="acct-row">
+          <span class="acct-avatar" aria-hidden="true">{{.Initials}}</span>
+          <span class="grow">
+            {{.Email}}
+            <div class="sub">
+              IMAP {{.IMAPHost}}:{{.IMAPPort}} ({{.IMAPSecurity}})
+              · SMTP {{.SMTPHost}}:{{.SMTPPort}} ({{.SMTPSecurity}})
+              {{if ne .IMAPUsername .Email}}· signing in as {{.IMAPUsername}}{{end}}
+            </div>
+          </span>
+        </div>
+        {{end}}
+        <p class="sub">You are signed in with your mailbox's own password. It is held
+           only for as long as this session lasts — signing out erases it, and so does
+           restarting the server. There is no separate application password to change
+           and no second mailbox to add.</p>
+      </div>
+      {{end}}
+
+      {{if .Settings.SectionIs "security"}}
+      <div class="card">
+        <h2>Your sign-in password</h2>
+        <p class="sub" style="margin-top:0">This is the password for this app, not for any mailbox.</p>
+        <form method="POST" action="/app/settings/password">
+          <div class="field">
+            <label for="p-current">Current password</label>
+            <input id="p-current" name="current_password" type="password" autocomplete="current-password" required>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="p-new">New password</label>
+              <input id="p-new" name="new_password" type="password" autocomplete="new-password" required minlength="10">
+            </div>
+            <div class="field">
+              <label for="p-confirm">Confirm new password</label>
+              <input id="p-confirm" name="confirm_password" type="password" autocomplete="new-password" required minlength="10">
+            </div>
+          </div>
+          <button type="submit" class="btn">Change password</button>
+        </form>
+      </div>
+      {{end}}{{/* end security section */}}
+
+      </div>{{/* .settings-body */}}
+      </div>{{/* .settings-frame */}}
+    </div>
+  </main>
+</div>
+{{end}}
+
+{{define "totpCard"}}
+      <div class="card">
+        <h2>One Time Password</h2>
+
+        <p class="sub" style="margin-top:0">A <strong>TOTP</strong> — time-based one-time
+          password — is the six digits an authenticator app shows and replaces every thirty
+          seconds. Setting it up shares one secret between this server and your phone; from
+          then on both sides compute the same code from that secret and the current time, so
+          nothing travels between them and a code that has been used, seen or written down is
+          worthless within half a minute.</p>
+
+        <p class="sub">It is a <em>second</em> factor, not a replacement for the password:
+          signing in asks for both. What it defends against is a password that has leaked —
+          reused on another site, guessed, or read over a shoulder — because knowing it is no
+          longer enough on its own.</p>
+
+        {{if .Direct}}
+        {{/* The uncomfortable half, said plainly. This app does not own
+             authentication under -imap: the mail server does, and a client
+             cannot add a factor on the server's behalf. A user who believes
+             their mailbox is behind two factors when only this web page is has
+             been actively misled, which is worse than not offering it. */}}
+        <div class="notice-bar" style="margin:0 0 14px">
+          <span><strong>What this protects:</strong> this web client. Your mailbox password is
+            checked by the mail server, and this code is checked here afterwards — so anything
+            else that speaks IMAP, such as a phone's mail app or Thunderbird, still needs only
+            the password. Putting two factors in front of the mailbox itself is a setting on
+            the mail server, not something a webmail client can do for it.</span>
+        </div>
+        {{end}}
+
+        <form method="POST" action="{{.Base}}">
+          <div class="switch-row">
+            {{/* data-submit-on-change rather than an inline onchange: this
+                 app's CSP has no unsafe-inline, so an on* attribute would be
+                 dead markup that looks like a working control. app.js section
+                 11 does the submitting; the Save button below is the path for
+                 anybody the script does not reach. */}}
+            <label class="switch">
+              <input type="checkbox" name="enabled" value="1" data-submit-on-change
+                     {{if .Enabled}}checked{{end}}>
+              <span class="switch-track" aria-hidden="true"></span>
+              <span class="switch-label">Ask for a one time password when I sign in</span>
+            </label>
+            <div class="hint">
+              {{if .Enabled}}On for <strong>{{.Account}}</strong>. Turning it off destroys the
+                secret — it is not kept dormant, so switching back on later issues a new one
+                and your authenticator app will need the new code.
+              {{else}}Off. Turning it on issues a secret and shows you the code to scan.
+              {{end}}
+            </div>
+          </div>
+          {{/* The switch applies itself, so this is the no-script path
+               rather than a second way to do the same thing. */}}
+          <noscript><button type="submit" class="btn btn-primary">Save</button></noscript>
+        </form>
+
+        {{if .Enabled}}
+        <div class="totp-setup">
+          <div class="totp-qr">
+            {{/* A route rather than a data: URI. The secret would otherwise sit
+                 in this page's HTML, and therefore in view-source, in any
+                 intermediate cache and in a screenshot of the source. */}}
+            <img src="{{.Base}}/qr.png" width="240" height="240"
+                 alt="QR code for adding this account to an authenticator app">
+          </div>
+          <div class="totp-detail">
+            <div class="field">
+              <label>Scan this, or type the key</label>
+              <div class="totp-secret mono">{{.Secret}}</div>
+              <div class="hint">Google Authenticator, Aegis, 1Password, Bitwarden — anything
+                that takes a TOTP key. Grouped in fours only for reading; the spaces are not
+                part of it.</div>
+            </div>
+
+            {{/* The live code. This is the whole point of showing anything
+                 beyond the QR: it is the only way to confirm enrolment worked
+                 *before* signing out and discovering it did not. */}}
+            {{/* Without this the page shows one code for as long as it is
+                 open, and somebody comparing their phone against an expired
+                 number concludes enrolment failed. */}}
+            <div class="field">
+              <label>The code this server expects right now</label>
+              {{template "totpLive" .}}
+              <div class="hint"><strong>Check your phone shows the same six
+                digits</strong> before you sign out. If they differ, the usual cause
+                is a clock: TOTP is time-based, and a phone or server more than a minute out
+                will never agree.</div>
+            </div>
+
+            <details class="pgp-explainer">
+              <summary>The provisioning URI, for a password manager that takes one</summary>
+              <div class="pgp-explainer-body">
+                <p class="mono totp-uri">{{.URI}}</p>
+                <p>This contains the secret. Treat it exactly as you would a password —
+                  anything holding it can generate your codes.</p>
+              </div>
+            </details>
+          </div>
+        </div>
+        {{end}}
+      </div>
+{{end}}
+
+
+{{/* The live code, and the request that replaces it.
+
+     **Each answer schedules its own replacement**, for exactly the number of
+     seconds this code has left -- hx-trigger="load delay:Ns" on markup htmx
+     has just swapped in. A fixed polling interval would either ask far more
+     often than the code changes or drift out of step with a window it cannot
+     see; this asks once per code, at the moment it stops being the answer.
+
+     It replaced a fetch in app.js that did the same thing with a timer, a
+     re-entrancy flag, an isConnected check for the panel htmx had swapped out
+     from under it, and a visibilitychange listener for a backgrounded tab
+     whose timers had been throttled. None of that is needed: htmx owns the
+     element, so when the element goes the request goes with it. */}}
+{{define "totpLive"}}
+<div id="totp-live" data-totp-code data-expires="{{.Expires}}"
+     hx-get="{{.Base}}/code"
+     hx-trigger="load delay:{{.Expires}}s"
+     hx-target="#totp-live" hx-swap="outerHTML">
+  <div class="totp-code mono" data-totp-digits>{{.Code}}</div>
+  <div class="hint">Valid for about <strong data-totp-seconds>{{.Expires}}</strong>
+    more second<span data-totp-plural>{{if ne .Expires 1}}s{{end}}</span>, then it changes.</div>
+</div>
+{{end}}
