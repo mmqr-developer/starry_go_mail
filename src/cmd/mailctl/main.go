@@ -99,8 +99,14 @@ func main() {
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `mailctl -- manage the mail client's database from outside the container
+// usageText is what `mailctl -h` prints, and what README.md quotes.
+//
+// A constant rather than a literal inside usage(), so a test can compare the
+// two. The README is the first place anyone reads about this tool, and help
+// text copied into a document is help text that drifts away from the tool --
+// which is a failure this repository has spent a lot of effort on elsewhere.
+// See TestTheREADMEQuotesTheRealHelp.
+const usageText = `mailctl -- manage the mail client's database from outside the container
 
   mailctl [flags] <command> [arguments]
 
@@ -149,8 +155,9 @@ Passwords are never taken as arguments -- they are prompted for, so they do
 not end up in shell history or in the process list. They ARE shown on screen
 as you type them, because a typo you cannot see is the likelier problem on a
 server you are alone on; -hide-password reverses that.
-`)
-}
+`
+
+func usage() { fmt.Fprint(os.Stderr, usageText) }
 
 func run(args []string) error {
 	switch args[0] {

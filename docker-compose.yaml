@@ -131,7 +131,7 @@ volumes:
   #      reuses it, pointing at the old location while this file claims
   #      otherwise. To change it, move the data yourself first, then:
   #        docker compose down
-  #        docker volume rm go_htmx_mail_client_config
+  #        docker volume rm <project>_config     # `docker volume ls` to find it
   #        docker compose up -d
   #
   #   3. Nothing is copied. A new location starts empty, which for this app
