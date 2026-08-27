@@ -143,8 +143,10 @@ type Config struct {
 	// struct answers what happened to it.
 
 	// DirectAdmins are the mail addresses that reach the admin panel when the
-	// session signed in against the mail server, where there is no is_admin
-	// column to consult. Empty means no mailbox session reaches it.
+	// session signed in against the mail server, which has no account row here
+	// to hang anything off. (Nor does any other mode: there is no is_admin
+	// column at all, and has not been since migration 3.) Empty means no
+	// mailbox session reaches it.
 	DirectAdmins []string `json:"direct_admin_users"`
 
 	// The superuser: the one account that may create other accounts, and the

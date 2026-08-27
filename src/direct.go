@@ -343,11 +343,12 @@ func (a *App) directAccountFor(ctx context.Context, address string) (*MailAccoun
 
 // isDirectAdmin reports whether this address reaches the admin panel.
 //
-// In this mode there is no is_admin column to consult -- there are no rows at
-// all -- so the list lives in the JSON config, beside the other things only an
-// operator with the volume can change. Empty means nobody, which makes the
-// admin panel unreachable rather than open: the safe direction, and the reason
-// it is worth saying at startup.
+// There is no is_admin column anywhere -- migration 3 dropped it -- and in this
+// mode there are no account rows at all, so the list lives in the JSON config,
+// beside the other things only an operator with the volume can change.
+//
+// Empty means nobody, which makes the admin panel unreachable rather than
+// open: the safe direction, and the reason it is worth saying at startup.
 func (a *App) isDirectAdmin(address string) bool {
 	for _, s := range a.cfg.DirectAdmins {
 		if strings.EqualFold(strings.TrimSpace(s), strings.TrimSpace(address)) {
