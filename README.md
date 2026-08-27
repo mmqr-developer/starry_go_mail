@@ -124,3 +124,7 @@ different, stricter policy than the one applied to outgoing mail.
 
 Written for a single deployment and used daily. It is offered as-is, without
 support or compatibility guarantees.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
