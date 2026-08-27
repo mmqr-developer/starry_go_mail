@@ -60,7 +60,7 @@ func testApp(t *testing.T, _, _ int) *App {
 		images:        NewImageStore(log),
 		attachments:   NewAttachStore(log),
 		contacts:      NewContactStore(db),
-		timed:         newTimedRows(),
+		views:         newViewStore(),
 		ips:           ips,
 		prefs2:        NewMailboxSettings(db),
 	}

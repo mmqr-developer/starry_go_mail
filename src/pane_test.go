@@ -629,11 +629,17 @@ func TestRowCarriesTheReadingTrigger(t *testing.T) {
 		`hx-trigger="load delay:30s"`,
 		`hx-target="this"`,
 		`hx-swap="outerHTML"`,
-		`"uid": "16"`, `"folder": "INBOX"`,
+		`"uid": "16"`,
 	} {
 		if !strings.Contains(open, want) {
 			t.Errorf("an open unread row is missing %s", want)
 		}
+	}
+	// The folder used to travel here too. It is the server's now: the row
+	// names the message being read, which is what the trigger is about, and
+	// nothing about where the reader happens to be.
+	if strings.Contains(open, `"folder"`) {
+		t.Error("the reading trigger still carries the folder")
 	}
 	// Everything the request needs is in the body. A path or query parameter
 	// would be the same fact in a second place.
@@ -693,52 +699,53 @@ func TestCanReuseSelection(t *testing.T) {
 // message named there may have been read already, in which case no timer was
 // ever sent and there is nothing to kill.
 func TestTimedRowRecord(t *testing.T) {
-	rows := newTimedRows()
+	a := testApp(t, 30, 12)
+	// Two browsers, which is what the key is for. Requests rather than bare
+	// strings now: the record lives in the view state, and the view state is
+	// reached the way every handler reaches it.
+	sessA, sessB := viewReq("session-a"), viewReq("session-b")
 
 	// Nothing sent yet: nothing to replace.
-	if prev := rows.set("session-a", 16); prev != 0 {
+	if prev := a.setTimedRow(sessA, 16); prev != 0 {
 		t.Errorf("first row reported a previous timer of %d", prev)
 	}
 	// The same row again -- a reload, a view switch -- is not a new timer and
 	// must not ask for the old one to be killed, because it is this one.
-	if prev := rows.set("session-a", 16); prev != 0 {
+	if prev := a.setTimedRow(sessA, 16); prev != 0 {
 		t.Errorf("re-sending the same row asked to kill %d", prev)
 	}
 	// A different message: the previous row has to be told to stop.
-	if prev := rows.set("session-a", 17); prev != 16 {
+	if prev := a.setTimedRow(sessA, 17); prev != 16 {
 		t.Errorf("switching rows reported %d, want 16", prev)
 	}
 	// A message with no timer (already read, or the rule is off) still ends
 	// the previous one.
-	if prev := rows.set("session-a", 0); prev != 17 {
+	if prev := a.setTimedRow(sessA, 0); prev != 17 {
 		t.Errorf("opening an untimed row reported %d, want 17", prev)
 	}
-	if prev := rows.set("session-a", 0); prev != 0 {
+	if prev := a.setTimedRow(sessA, 0); prev != 0 {
 		t.Errorf("nothing outstanding, but it reported %d", prev)
 	}
 
 	// Sessions must not see each other's rows: two people reading the same
 	// mailbox would otherwise kill each other's timers.
-	rows.set("session-a", 21)
-	if prev := rows.set("session-b", 22); prev != 0 {
+	a.setTimedRow(sessA, 21)
+	if prev := a.setTimedRow(sessB, 22); prev != 0 {
 		t.Errorf("a second session inherited %d from the first", prev)
 	}
-	if prev := rows.set("session-a", 23); prev != 21 {
+	if prev := a.setTimedRow(sessA, 23); prev != 21 {
 		t.Errorf("session A reported %d, want its own 21", prev)
 	}
 
 	// The timer firing spends it.
-	rows.clear("session-a")
-	if prev := rows.set("session-a", 24); prev != 0 {
+	a.setTimedRow(sessA, 0)
+	if prev := a.setTimedRow(sessA, 24); prev != 0 {
 		t.Errorf("after the timer fired it still reported %d", prev)
 	}
 
 	// No session -- an unauthenticated or malformed request -- records nothing
 	// rather than sharing one slot between everybody.
-	if prev := rows.set("", 30); prev != 0 {
+	if prev := a.setTimedRow(viewReq(""), 30); prev != 0 {
 		t.Errorf("a request with no session reported %d", prev)
-	}
-	if prev := rows.set("", 31); prev != 0 {
-		t.Errorf("requests with no session share a slot: reported %d", prev)
 	}
 }

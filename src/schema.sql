@@ -340,3 +340,22 @@ CREATE TABLE IF NOT EXISTS blocked_ip_log (
 
 CREATE INDEX IF NOT EXISTS idx_blocked_ip_log_at ON blocked_ip_log (at);
 CREATE INDEX IF NOT EXISTS idx_blocked_ip_log_ip ON blocked_ip_log (ip, until);
+
+-- One row, holding a known string sealed with the deployment key.
+--
+-- The key is derived from secret_key in mail_client.json and the pepper in
+-- effect. Change either and every stored mail password and TOTP secret becomes
+-- undecryptable, with no way back -- and nothing used to notice until a user
+-- failed to sign in days later. Opening this row at startup makes that a
+-- refusal to start, naming the cause, while the original pepper still exists.
+--
+-- CHECK (id = 1) rather than a plain primary key: there is exactly one
+-- deployment key, so a second row could only ever be a bug, and the schema is
+-- the cheapest place to say so. See keycheck.go.
+CREATE TABLE IF NOT EXISTS key_check (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+
+    -- keyCheckPlaintext, sealed. Never anything user-supplied.
+    probe TEXT NOT NULL,
+    at    TEXT NOT NULL
+);

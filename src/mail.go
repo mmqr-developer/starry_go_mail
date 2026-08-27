@@ -527,6 +527,21 @@ func specialUseOf(m *imap.ListData) string {
 			return ""
 		}
 	}
+	return specialUseOfName(name)
+}
+
+// specialUseOfName is the by-name half, for a server that advertises no
+// SPECIAL-USE attributes at all.
+//
+// Split out from specialUseOf so it can be tested directly, because two things
+// depend on it agreeing with itself: the toolbar decides whether to draw the
+// Junk and Archive buttons from it, and ensureTrash decides whether a mailbox
+// already has somewhere for deleted mail. If those two ever read the same
+// folder differently, Delete would flag \Deleted while a Trash folder sat
+// there unused.
+//
+// The name arrives with any personal-namespace prefix already stripped.
+func specialUseOfName(name string) string {
 	switch strings.ToLower(name) {
 	case "inbox":
 		return "inbox"
@@ -796,8 +811,8 @@ func toUIDs[T ~uint32](in []T) []imap.UID {
 	return out
 }
 
-// ensureStandardFolders makes the two folders this client cannot work without
-// if the mailbox does not already have them.
+// ensureStandardFolders makes the folders this client cannot work without if
+// the mailbox does not already have them.
 //
 //   - **Drafts**, because the composer autosaves into it. Without one, closing
 //     a half-written message would have nowhere to put it, and the failure
@@ -807,13 +822,22 @@ func toUIDs[T ~uint32](in []T) []imap.UID {
 //     mean the same thing and specialUseOf maps both onto "junk", so a mailbox
 //     with a Junk folder is left exactly as it is. Creating a second one
 //     beside it would split the user's spam across two places.
+//   - **Trash**, for the same class of reason. deleteMessages moves there and,
+//     finding no such folder, falls back to setting \Deleted without an
+//     EXPUNGE -- correct IMAP, and invisible in a list that renders no deleted
+//     state. The row comes back looking exactly as it did, so Delete appears
+//     to do nothing at all.
 //
-// Nothing else is created. Sent and Trash are conspicuously absent: this app
-// files a copy in Sent and moves to Trash when they exist and says so when
-// they do not (see sentFolderFor and deleteMessages), and a mailbox whose
-// owner has deliberately not got them is not this app's to reorganise. These
-// two are here because a *feature* depends on them, which is a different
-// argument from tidiness.
+// **Trash used to be excluded on purpose, and this comment used to say so.**
+// The argument was that a mailbox whose owner deliberately has no Trash is not
+// this app's to reorganise -- true, and beside the point: the alternative here
+// is not "respect their layout", it is a Delete button that silently does
+// nothing. The rule these three share is that a *feature* depends on them,
+// which is a different argument from tidiness.
+//
+// Sent is still absent, and for the original reason: filing a copy there is
+// skipped with an explanation when the folder is missing (see sentFolderFor),
+// which is a visible outcome rather than a silent one.
 func (p *Pool) ensureStandardFolders(c *imapclient.Client, acct *MailAccount) {
 	p.mu.Lock()
 	done := p.provisioned[acct.AccountID]
@@ -827,13 +851,15 @@ func (p *Pool) ensureStandardFolders(c *imapclient.Client, acct *MailAccount) {
 		p.log.Warn("cannot list folders to check for Drafts and Spam", "error", err)
 		return
 	}
-	var hasDrafts, hasJunk bool
+	var hasDrafts, hasJunk, hasTrash bool
 	for _, m := range boxes {
 		switch specialUseOf(m) {
 		case "drafts":
 			hasDrafts = true
 		case "junk":
 			hasJunk = true
+		case "trash":
+			hasTrash = true
 		}
 	}
 
@@ -857,6 +883,11 @@ func (p *Pool) ensureStandardFolders(c *imapclient.Client, acct *MailAccount) {
 		// "Spam" rather than "Junk" because that is the name asked for. Either
 		// would be found again by specialUseOf, so the choice is cosmetic.
 		create("Spam")
+	}
+	if !hasTrash {
+		// Anything specialUseOf calls "trash" counts, so a mailbox with
+		// "Deleted Items" keeps it and does not get a second folder beside it.
+		create("Trash")
 	}
 
 	p.mu.Lock()

@@ -403,6 +403,13 @@ html {
 
 /* — folders — */
 .folders { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 10px; }
+/* Each folder is its own little form, so that clicking one posts a name to the
+   server rather than carrying the whole position in a URL -- and still works
+   with scripting off. The form is layout-neutral: the button inside it is what
+   was being styled before, and .folder already described something with a
+   transparent background and a left-aligned label, so it needed no changes to
+   become one. */
+.folder-form { display: block; }
 .folder {
   display: flex; align-items: center; gap: 8px;
   text-decoration: none;
@@ -532,9 +539,22 @@ html {
    row of the layout. */
 .list-stack { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 #list-search { display: none; }
+/* Select-all. A button where it was a checkbox, because what it does now is
+   post a verb -- so it takes the toolbar's own metrics rather than a form
+   control's, and sits at the same size as the search button beside it. */
+.check-all { flex: none; }
 .list-note {
   margin: 0; padding: 6px 10px; font-size: 12px; color: var(--c-text-dim);
   background: #fbfbfb; border-bottom: 1px solid var(--c-divider);
+}
+/* The variant that is about something the user just did, rather than about the
+   mail server's capabilities. It has to be noticed on a screen where the eye is
+   on the list -- the dim grey above reads as a permanent caption, which is the
+   wrong register for the answer to a button press. Same amber family as an
+   unread row's left edge, so it belongs to this list rather than arriving from
+   the app's error palette. */
+.list-note-warn {
+  color: #7a4a00; background: #fff6e0; border-bottom-color: #ffc95e;
 }
 .list { flex: 1; min-height: 0; overflow-y: auto; }
 
@@ -564,6 +584,7 @@ html {
   flex: 1; min-width: 0;
   display: block; color: inherit; text-decoration: none;
   padding: 6px 10px 6px 2px; font: inherit;
+  background: transparent; border: 0; text-align: left; cursor: pointer;
 }
 .msg-line { display: flex; align-items: baseline; gap: 8px; }
 .msg-from {
@@ -647,11 +668,16 @@ html {
   color: var(--c-text-dim);
 }
 .view-modes-note .icon { width: 14px; height: 14px; flex: none; }
+/* A rung is a <button> where it was an <a>, so it needs the three things a
+   button does not inherit: the app's font family, a pointer, and no user-agent
+   background. The metrics are unchanged, which is why the segmented look
+   survived the change. */
 .seg {
   display: inline-block; padding: 3px 10px;
   background: #fff; color: var(--c-text); text-decoration: none;
   border: 1px solid var(--c-border-soft); margin-left: -1px;
   font-size: 12px; line-height: 1.6;
+  font-family: var(--font); cursor: pointer;
 }
 .seg:first-of-type { border-radius: var(--radius-btn) 0 0 var(--radius-btn); margin-left: 0; }
 .seg:last-of-type { border-radius: 0 var(--radius-btn) var(--radius-btn) 0; }
@@ -661,6 +687,11 @@ html {
   font-weight: 600; position: relative; z-index: 1;
 }
 
+/* The envelope addresses, when they are shown. Dimmer and monospaced: they
+   are what the servers wrote rather than what the sender did, and reading them
+   is comparing them against the From line above -- which is easier when they
+   do not look like part of it. */
+.view-envelope { color: var(--c-text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
 .view-body { flex: 1; min-height: 0; }
 .view-body iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
 

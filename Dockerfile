@@ -8,22 +8,54 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-# The compiled-in pepper, mixed with secret_key from the config to derive the
-# key that encrypts stored mail passwords and TOTP secrets.
+# The pepper: mixed with secret_key from the config to derive the key that
+# encrypts stored mail passwords and TOTP secrets.
 #
-# **This has to match whatever built the binary that wrote the data.** build.sh
-# reads it from pepper.txt; that file is gitignored and therefore NOT in the
-# build context, so an image built without passing it here gets an empty
-# pepper. Empty is fully supported and is what an install with no pepper.txt
-# already has -- but building the container without the pepper a local build
-# used makes every stored password and TOTP secret undecryptable, with no way
-# back. Pass it explicitly:
+# **This image ships without one, and that is deliberate.** A pepper compiled
+# into a distributed image is not a secret. Everyone who pulls the image has
+# the same value, and `strings` reads it straight back out -- so it protects
+# nothing, while still carrying the whole trap: a later release built with a
+# different pepper makes every stored password on every install that upgraded
+# permanently unreadable.
 #
-#   docker build --build-arg PEPPER="$(cat pepper.txt)" -t starry_go_mail .
+# An image built with no pepper is safe to publish and safe to upgrade forever,
+# because "no pepper" is the same value in every release. What actually
+# protects a deployment is secret_key, which is generated per install into
+# /config/mail_client.json and never travels with the image.
 #
-# Left empty on purpose rather than defaulted to something: a wrong pepper is
-# worse than none, and a default would be a wrong one.
+# **To have a real pepper, supply it at runtime**, from outside the /config
+# volume -- which is the only arrangement that gives the property the pepper
+# exists for, namely that a stolen volume is not enough on its own:
+#
+#   docker run -e MAIL_CLIENT_PEPPER_FILE=/run/secrets/pepper \
+#              -v /etc/starry/pepper:/run/secrets/pepper:ro ...
+#
+# or, under Compose, a secret named mail_client_pepper -- it lands at
+# /run/secrets/mail_client_pepper, which is read with no configuration at all.
+# See the secrets: block in docker-compose.yaml. Back it up: losing it loses
+# every stored mail password and TOTP secret, exactly like losing secret_key.
+#
+# The server refuses to start if the pepper it finds cannot decrypt the
+# database it was given, so a secret that fails to mount is a container that
+# does not come up rather than users who cannot sign in next week.
 ARG PEPPER=""
+
+# Baking one in anyway requires saying so twice.
+#
+# It is still the right thing for an image you build for one host and push
+# nowhere -- ./build.sh --docker does exactly that, and passes both args. But a
+# single --build-arg PEPPER=... copied out of an old README is precisely how a
+# secret ends up on a public registry, so one argument is not enough to do it.
+ARG ALLOW_BAKED_PEPPER=0
+RUN if [ -n "$PEPPER" ] && [ "$ALLOW_BAKED_PEPPER" != "1" ]; then \
+      echo "refusing to bake a pepper into this image." >&2; \
+      echo "A pepper inside a distributed image is readable by anyone who" >&2; \
+      echo "pulls it, and pins every future release to this exact value." >&2; \
+      echo "Supply it at runtime instead: MAIL_CLIENT_PEPPER_FILE, or a" >&2; \
+      echo "Compose secret named mail_client_pepper." >&2; \
+      echo "For a private single-host image, pass ALLOW_BAKED_PEPPER=1 too." >&2; \
+      exit 1; \
+    fi
 
 # The static assets are embedded from src/static/ exactly as they are in the
 # build context, and this stage does not regenerate any of them.
@@ -62,7 +94,9 @@ RUN CGO_ENABLED=0 go build \
 # refuses to start without reading its logs.
 #
 # Built with the same pepper for the same reason: a mailctl that cannot decrypt
-# what the server wrote is a tool that reports a TOTP secret as corrupt.
+# what the server wrote is a tool that reports a TOTP secret as corrupt. With a
+# runtime pepper this takes care of itself -- both binaries read the same
+# MAIL_CLIENT_PEPPER_FILE -- but a baked one has to be passed to both.
 RUN CGO_ENABLED=0 go build \
       -ldflags "-s -w -X mail_client/src/internal/secret.BuildPepper=${PEPPER}" \
       -o /out/mailctl ./src/cmd/mailctl

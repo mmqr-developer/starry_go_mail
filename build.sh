@@ -247,7 +247,7 @@ else
     echo "compressed $written, skipped $skipped, removed $stale"
 fi
 
-step "go test"
+step "go test (may take 60-90 seconds!!)"
 # -race, not a bare `go test`. This app has four goroutines touching shared
 # state -- the IMAP connection reaper, the composer-image reaper, the direct
 # session sweep and the contact scrape -- and it has already shipped one race
@@ -283,12 +283,21 @@ if [ "$DOCKER" -eq 1 ]; then
     # the two then disagree about every stored mail password and TOTP secret --
     # the exact failure the Dockerfile's PEPPER comment describes at length.
     #
-    # This matters more now than it used to: a missing pepper.txt is generated
-    # a few steps up, so a fresh clone reaches here WITH a pepper rather than
-    # without one, and the mismatch would be the normal case rather than the
-    # rare one. Empty is passed through as empty, which is correct for an
-    # install that has no pepper.txt.
-    docker build --build-arg PEPPER="$PEPPER" -t "$APP" .
+    # ALLOW_BAKED_PEPPER=1 because the Dockerfile now refuses to compile one in
+    # without it. That guard is aimed at an image being pushed to a registry,
+    # where a baked pepper is readable by everyone who pulls it and pins every
+    # future release to one value. This image is built here, for this host, and
+    # goes nowhere -- so baking is right, and saying so explicitly is the point.
+    #
+    # **An image for hub.docker.com must NOT come from here.** Build that one
+    # with no pepper at all and let the operator supply one at runtime:
+    #
+    #   docker build -t <user>/starry_go_mail:<tag> .
+    #
+    # Empty is passed through as empty, which is correct for an install that has
+    # no pepper.txt, and is also what makes the guard above a no-op there.
+    docker build --build-arg PEPPER="$PEPPER" \
+                 --build-arg ALLOW_BAKED_PEPPER=1 -t "$APP" .
 else
     step "docker"
     echo "skipped -- pass --docker to build the image"

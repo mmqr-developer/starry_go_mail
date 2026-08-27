@@ -80,7 +80,7 @@ func TestTidyKeepsEveryViewTheSame(t *testing.T) {
 		Reader: &ReaderVM{Message: &Message{UID: 21, Subject: "Re: a thing",
 			From: "sam@example.com", To: "you@example.com",
 			Attachments: []*Attachment{{Index: 1, Filename: "notes.pdf", Size: 2048}}},
-			View: ViewPlain, BodyURL: "/app/message/21/body", Prev: 20, Next: 22},
+			View: ViewPlain, BodyURL: "/app/message/21/body", HasPrev: true, HasNext: true},
 		Compose: &ComposeVM{Draft: &Draft{}},
 		Auth:    &AuthVM{},
 	}

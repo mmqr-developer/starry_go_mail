@@ -30,6 +30,24 @@ import (
 type BodyView string
 
 const (
+	// ViewSource is the message exactly as it arrived: every header, the MIME
+	// boundaries, the encoded parts, nothing interpreted.
+	//
+	// **It is not a rung of the ladder above.** The ladder orders renderings
+	// by how much of the sender's intent they honour, and each step up adds a
+	// risk. This is off to one side and below all of it: it is the only view
+	// that interprets nothing at all, so it is the safest thing here and the
+	// only one that can answer "what actually arrived" -- which is the
+	// question somebody has when a message looks wrong.
+	//
+	// It ranks with plain text so that every helper below answers false for
+	// it: no markup, no images of either kind. What it must NOT do is inherit
+	// plain text's other behaviour -- see resolveBodyView, where a message
+	// with no HTML part collapses every HTML rung onto plain, and this one has
+	// to survive that or a text-only message could not be viewed as source at
+	// all.
+	ViewSource BodyView = "source"
+
 	// ViewPlain is the text/plain part, or a text rendering of the HTML when
 	// the sender did not send one. It is always available -- a message with no
 	// readable form at all is not something this ladder should be able to
@@ -83,6 +101,7 @@ var bodyViewLabels = []struct {
 	Label string
 	Title string
 }{
+	{ViewSource, "Src", "Show the message exactly as it arrived, with every header"},
 	{ViewPlain, "Plain text", "Show the message as text, with no markup and no images"},
 	{ViewHTML, "HTML", "Show the sender's formatting, with no images at all"},
 	{ViewInline, "+ embedded images", "Also show the images that came with the message"},
@@ -94,8 +113,31 @@ var bodyViewLabels = []struct {
 // `images=1` is still honoured because it is what the old "Load images" link
 // sent, and a bookmarked or reloaded page from that era should not silently
 // land somewhere different from where it did before.
+// bodyViewNamed turns a posted rung name into a rung, or "" if it is not one.
+//
+// The name of a rung is what the user clicked, so it travels in the request --
+// but it is still input, and an unrecognised value must leave the state alone
+// rather than becoming a BodyView nothing can render.
+func bodyViewNamed(s string) BodyView {
+	switch BodyView(strings.TrimSpace(s)) {
+	case ViewSource:
+		return ViewSource
+	case ViewPlain:
+		return ViewPlain
+	case ViewHTML:
+		return ViewHTML
+	case ViewInline:
+		return ViewInline
+	case ViewRemote:
+		return ViewRemote
+	}
+	return ""
+}
+
 func parseBodyView(r *http.Request, def BodyView) BodyView {
 	switch BodyView(strings.TrimSpace(r.URL.Query().Get("view"))) {
+	case ViewSource:
+		return ViewSource
 	case ViewPlain:
 		return ViewPlain
 	case ViewHTML:
@@ -138,8 +180,19 @@ func (a *App) defaultBodyView(p *Prefs) BodyView {
 // collapses onto plain text rather than rendering an empty document with a
 // control bar above it claiming otherwise.
 func resolveBodyView(msg *Message, want BodyView) BodyView {
+	// Source is always available and always exactly itself. It is the one view
+	// that does not depend on the message having any particular part, so it
+	// must not be collapsed by the rule below -- a text-only message is
+	// precisely the kind whose headers somebody wants to read.
+	if want == ViewSource {
+		return ViewSource
+	}
 	if msg == nil || strings.TrimSpace(msg.HTML) == "" {
 		return ViewPlain
 	}
 	return want
 }
+
+// IsSource reports whether this is the raw view. Its own helper rather than an
+// equality test at each call site, matching the other three.
+func (v BodyView) IsSource() bool { return v == ViewSource }

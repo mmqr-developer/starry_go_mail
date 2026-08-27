@@ -67,6 +67,20 @@ type claims struct {
 	// every outstanding session instead of letting a stale cookie through
 	// into a mode whose assumptions it does not meet.
 	SID string `json:"sid,omitempty"`
+	// VID keys this sign-in's view state -- where in the mailbox this browser
+	// is. See viewstate.go.
+	//
+	// **Its own claim rather than a reuse of SID.** requireAuth reads a
+	// non-empty SID as "this is a direct mailbox session" and takes a
+	// different branch of authentication for it, so putting a value there for
+	// an application account would not key a map, it would change how that
+	// account signs in.
+	//
+	// Random per sign-in, so two browsers signed in as the same person have
+	// two independent places in the mailbox. A token minted before this
+	// existed has no VID and falls back to the account, which shares one state
+	// across that person's sessions -- correct enough, and it expires.
+	VID string `json:"vid,omitempty"`
 	// IsSuperuser marks the one session that manages accounts and can read no mail.
 	//
 	// In the token rather than looked up per request because there is nothing
@@ -83,6 +97,42 @@ type claims struct {
 type ctxKey int
 
 const claimsKey ctxKey = iota
+
+type viewIDKeyT struct{}
+
+var viewIDKey viewIDKeyT
+
+// newViewID is the key for one sign-in's view state. Random rather than
+// derived from the account, so signing in twice gives two places in the
+// mailbox rather than one that both browsers fight over.
+//
+// It is not a credential -- it names a map entry behind an already
+// authenticated request -- but it is minted from the same source as one
+// anyway, because an id anybody can guess is an id somebody will eventually
+// find a way to submit.
+func newViewID() string {
+	s, err := randomHex(16)
+	if err != nil {
+		// Only if the system entropy source fails, at which point nothing
+		// else here is safe either. An empty id falls back to the account,
+		// which is the pre-existing behaviour rather than a broken one.
+		return ""
+	}
+	return s
+}
+
+func withViewID(ctx context.Context, vid string) context.Context {
+	if vid == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, viewIDKey, vid)
+}
+
+// currentViewID is only meaningful downstream of requireAuth.
+func currentViewID(r *http.Request) string {
+	vid, _ := r.Context().Value(viewIDKey).(string)
+	return vid
+}
 
 // initSessionSecret resolves the signing key. A configured value keeps sessions
 // alive across restarts; an absent one generates a fresh key, which is the
@@ -139,6 +189,7 @@ func (a *App) issueSuperuserSession(w http.ResponseWriter, r *http.Request) erro
 		// this id finds nothing, which is the correct answer.
 		Username:    a.cfg.SuperuserUsername,
 		IsSuperuser: true,
+		VID:         newViewID(),
 		TZ:          tz,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expires),
@@ -160,6 +211,7 @@ func (a *App) issueSessionAt(w http.ResponseWriter, u *AppUser, sid, tz string) 
 		UserID:   u.UserID,
 		Username: u.Username,
 		SID:      sid,
+		VID:      newViewID(),
 		TZ:       tz,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expires),
@@ -362,6 +414,7 @@ func (a *App) requireAuth(next http.Handler) http.Handler {
 			// the same token all day and no request has to rewrite it.
 			ctx := context.WithValue(r.Context(), claimsKey, sess.directUser())
 			ctx = withDirectSession(ctx, sess)
+			ctx = withViewID(ctx, cl.VID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -374,6 +427,7 @@ func (a *App) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), claimsKey, u)
+		ctx = withViewID(ctx, cl.VID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

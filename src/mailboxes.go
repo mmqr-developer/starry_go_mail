@@ -271,7 +271,7 @@ func (a *App) handleMailboxesOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.setSelectedAccount(w, acct.AccountID)
-	a.redirect(w, r, "/app/mailbox")
+	a.redirect(w, r, "/app/")
 }
 
 // renderMailboxes fills in the list and draws the page. Every handler ends here

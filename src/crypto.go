@@ -33,3 +33,15 @@ func NewUserSealer(hexKey, passwordHash string) (*Sealer, error) {
 func decodeSecretKey(s string) ([]byte, error) { return secret.DecodeKey(s) }
 
 func randomHex(n int) (string, error) { return secret.RandomHex(n) }
+
+// The pepper's runtime sources, named here so keycheck.go's error message and
+// the startup log say exactly what an operator has to set. See
+// internal/secret/pepper.go for the order they are read in.
+const (
+	pepperEnvName     = secret.PepperEnv
+	pepperFileEnvName = secret.PepperFileEnv
+)
+
+// pepperSource describes where the pepper came from, for the startup log and
+// for the key-check error. It never returns the pepper itself.
+func pepperSource() string { return secret.PepperSource() }

@@ -62,7 +62,25 @@ var migrations = []struct {
 	// The block history. Additive again, and separate from migration 12 so a
 	// database that already ran that one gains only what is new.
 	{13, blockedIPLogSQL},
+
+	// The encryption probe. Additive, and empty on arrival: the row itself is
+	// written by verifyEncryptionKey on the first start after this, which is
+	// the only place that can prove the current key is the right one to record.
+	{14, keyCheckSQL},
 }
+
+// keyCheckSQL is migration 14: one row holding a known value, sealed.
+//
+// Reading it back at startup is what turns a changed secret_key or a changed
+// pepper into a container that will not start, instead of a user who cannot
+// sign in three days later. See keycheck.go.
+const keyCheckSQL = `
+CREATE TABLE IF NOT EXISTS key_check (
+    id    INTEGER PRIMARY KEY CHECK (id = 1),
+    probe TEXT NOT NULL,
+    at    TEXT NOT NULL
+);
+`
 
 // blockedIPLogSQL is migration 13: one row per block episode, kept for a month.
 const blockedIPLogSQL = `

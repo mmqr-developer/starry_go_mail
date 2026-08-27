@@ -216,7 +216,9 @@ func (a *App) endDirectSession(sess *directSession) {
 	if sess == nil {
 		return
 	}
-	a.timed.forget(sess.id)
+	// Signing out forgets where they were, which is what a shared machine
+	// needs -- the sweep alone would leave it sitting there for a day.
+	a.views.forget(sess.id)
 	a.pool.Drop(sess.account.AccountID)
 	sess.wipePassword()
 }

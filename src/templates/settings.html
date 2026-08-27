@@ -9,7 +9,7 @@
   <header class="settings-head">
     <h1>Settings</h1>
     <span class="settings-head-gap"></span>
-    <a hx-boost="true" class="btn btn-primary settings-close" href="/app/mailbox?folder=INBOX">
+    <a hx-boost="true" class="btn btn-primary settings-close" href="/app/">
       {{icon "close"}} Close settings
     </a>
   </header>
@@ -181,6 +181,18 @@
             <div class="hint">Drops the sender's colours on the HTML rung. A message written
               for a dark theme is otherwise pale grey on white here, and one with
               white-on-white styling is invisible.</div>
+          </div>
+          <div class="field">
+            <label for="g-envelope">
+              <input id="g-envelope" type="checkbox" name="show_envelope" value="1"
+                     {{if index .Prefs "show_envelope"}}checked{{end}}>
+              Show the envelope addresses
+            </label>
+            <div class="hint">Adds <em>Envelope From</em> (Return-Path) and <em>Envelope To</em>
+              (Delivered-To) under the To line. These are what the mail <em>servers</em> used to
+              route the message, and they can differ from the From and To the sender wrote --
+              which is what makes them worth seeing when a message looks like it came from
+              somewhere it did not.</div>
           </div>
           <div class="field">
             <label for="g-remote">
@@ -546,7 +558,7 @@
              it lives in the sidebar template, which is not on this screen, so
              this is a link to the mailbox with the dialog asked for rather
              than a second copy of the form. */}}
-        <p><a hx-boost="true" class="btn btn-primary" href="/app/mailbox?folder=INBOX&amp;newfolder=1">
+        <p><a hx-boost="true" class="btn btn-primary" href="/app/?newfolder=1">
           {{icon "folder-plus"}} New folder</a></p>
 
         {{if .AllFolders}}

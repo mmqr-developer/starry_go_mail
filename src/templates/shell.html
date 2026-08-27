@@ -2,8 +2,11 @@
      so it lives inside the list's form. */}}
 {{define "list-bar"}}<div id="list-bar" class="btn-toolbar list-toolbar"{{if .IsOOB "list-bar"}} hx-swap-oob="true"{{end}}>
     <div class="btn-group">
+      {{/* No parameters. Reload means "draw where I am again", and where the
+           user is lives on the server -- the folder, the page, the sort and
+           the search all come back unchanged without being named here. */}}
       <a hx-boost="true" class="btn" title="Reload" aria-label="Reload this folder"
-         href="/app/mailbox?folder={{.Folder}}{{if .Mailbox}}{{if .Mailbox.Page.Sort}}&amp;sort={{.Mailbox.Page.Sort}}{{end}}{{end}}">{{icon "reload"}}</a>
+         href="/app/">{{icon "reload"}}</a>
     </div>
 
     <div class="btn-group">
@@ -16,19 +19,19 @@
     <div class="btn-group">
       {{if special .Folders "archive"}}
       <button type="submit" class="btn" title="Archive" aria-label="Archive the selected messages"
-              formaction="/app/messages/action?action=archive&amp;folder={{.Folder | urlquery}}">{{icon "archive"}}</button>
+              formaction="/app/do/archive" hx-post="/app/do/archive">{{icon "archive"}}</button>
       {{end}}
       {{if special .Folders "junk"}}
         {{if eq .Folder (special .Folders "junk")}}
         <button type="submit" class="btn" title="Not spam" aria-label="Move the selected messages back to the inbox"
-                formaction="/app/messages/action?action=notspam&amp;folder={{.Folder | urlquery}}">{{icon "check"}}</button>
+                formaction="/app/do/notspam" hx-post="/app/do/notspam">{{icon "check"}}</button>
         {{else}}
         <button type="submit" class="btn" title="Spam" aria-label="Move the selected messages to Junk"
-                formaction="/app/messages/action?action=spam&amp;folder={{.Folder | urlquery}}">{{icon "warning"}}</button>
+                formaction="/app/do/spam" hx-post="/app/do/spam">{{icon "warning"}}</button>
         {{end}}
       {{end}}
       <button type="submit" class="btn" title="Delete" aria-label="Delete the selected messages"
-              formaction="/app/messages/action?action=delete&amp;folder={{.Folder | urlquery}}">{{icon "trash"}}</button>
+              formaction="/app/do/delete" hx-post="/app/do/delete">{{icon "trash"}}</button>
     </div>
 
     <div class="btn-group">
@@ -36,16 +39,16 @@
         <summary class="btn" title="More actions" aria-label="More actions">{{icon "menu"}}</summary>
         <menu class="drop-menu">
           <li><button type="submit" class="drop-item"
-                      formaction="/app/messages/action?action=seen&amp;folder={{.Folder | urlquery}}">
+                      formaction="/app/do/seen" hx-post="/app/do/seen">
             <span class="drop-icon" aria-hidden="true">{{icon "envelope-open"}}</span>Mark as read</button></li>
           <li><button type="submit" class="drop-item"
-                      formaction="/app/messages/action?action=unseen&amp;folder={{.Folder | urlquery}}">
+                      formaction="/app/do/unseen" hx-post="/app/do/unseen">
             <span class="drop-icon" aria-hidden="true">{{icon "envelope"}}</span>Mark as unread</button></li>
           <li><button type="submit" class="drop-item"
-                      formaction="/app/messages/action?action=flag&amp;folder={{.Folder | urlquery}}">
+                      formaction="/app/do/flag" hx-post="/app/do/flag">
             <span class="drop-icon" aria-hidden="true">{{icon "star-on"}}</span>Add star</button></li>
           <li><button type="submit" class="drop-item"
-                      formaction="/app/messages/action?action=unflag&amp;folder={{.Folder | urlquery}}">
+                      formaction="/app/do/unflag" hx-post="/app/do/unflag">
             <span class="drop-icon" aria-hidden="true">{{icon "star"}}</span>Remove star</button></li>
           {{/* Read and filed in one press. Its own entry rather than asking
                people to press two buttons in the right order: spam that has
@@ -53,11 +56,11 @@
                Only offered where there is somewhere to put it. */}}
           {{if special .Folders "junk"}}
           <li class="drop-sep"><button type="submit" class="drop-item"
-                      formaction="/app/messages/action?action=spam-seen&amp;folder={{.Folder | urlquery}}">
+                      formaction="/app/do/spam-seen" hx-post="/app/do/spam-seen">
             <span class="drop-icon" aria-hidden="true">{{icon "warning"}}</span>Mark as read and spam</button></li>
           {{end}}
           <li class="drop-sep"><button type="submit" class="drop-item"
-                      formaction="/app/messages/action?action=seen-all&amp;folder={{.Folder | urlquery}}">
+                      formaction="/app/do/seen-all" hx-post="/app/do/seen-all">
             <span class="drop-icon" aria-hidden="true">{{icon "check"}}</span>Mark the whole folder read</button></li>
         </menu>
       </details>
@@ -66,13 +69,17 @@
     <div class="btn-group">
       <details class="menu">
         <summary class="btn" title="Sort" aria-label="Sort the message list">{{icon "sort"}}</summary>
+        {{/* Each entry names the order it is -- what was clicked -- and
+             nothing else. The folder and the search used to ride along in
+             every one of these nine hrefs. */}}
         <menu class="drop-menu">
           {{$cur := ""}}{{if .Mailbox}}{{$cur = .Mailbox.Page.Sort}}{{end}}
           {{range sortOptions}}
-          <li><a hx-boost="true" class="drop-item" {{if eq .Key $cur}}aria-current="true"{{end}}
-                 href="/app/mailbox?folder={{$.Folder}}&amp;sort={{.Key}}{{if $.Mailbox}}{{if $.Mailbox.Page.Query}}&amp;q={{$.Mailbox.Page.Query}}{{end}}{{end}}">
+          <li><button type="submit" class="drop-item" form="list-nav"
+                      formaction="/app/list/sort" hx-post="/app/list/sort" name="by" value="{{.Key}}"
+                      {{if eq .Key $cur}}aria-current="true"{{end}}>
             <span class="drop-icon" aria-hidden="true">{{.Icon}}</span>{{.Label}}
-          </a></li>
+          </button></li>
           {{end}}
         </menu>
       </details>
@@ -84,16 +91,28 @@
      is list-search-bar rather than list-search: the GET form that carries the
      query already owns that one. */}}
 {{define "list-search-bar"}}<div id="list-search-bar" class="list-header"{{if .IsOOB "list-search-bar"}} hx-swap-oob="true"{{end}}>
-      <input type="checkbox" id="check-all" data-check-all
-             aria-label="Select every message on this page">
+      {{/* Ticks every row on this page, or clears them if they are all
+           ticked already. A button rather than a checkbox driven by script:
+           what it does is change the server's selection, and the boxes below
+           are then drawn from that -- which is the same round trip every other
+           control here makes, and it works with scripting off. */}}
+      <button type="submit" class="btn check-all" form="list-nav"
+              formaction="/app/list/select/all" hx-post="/app/list/select/all"
+              hx-post="/app/list/select/all"
+              hx-target="#list-search-bar" hx-swap="outerHTML"
+              title="Select every message on this page"
+              aria-label="Select every message on this page">{{icon "check"}}</button>
       <label class="sr-only" for="q">Search this folder</label>
       <input id="q" type="search" name="q" form="list-search" placeholder="Search"
              value="{{if .Mailbox}}{{.Mailbox.Page.Query}}{{end}}">
       <button type="submit" form="list-search" class="btn" title="Search"
               aria-label="Search this folder">{{icon "search"}}</button>
       {{if and .Mailbox .Mailbox.Page.Query}}
-      <a hx-boost="true" class="btn" href="/app/mailbox?folder={{.Folder}}" title="Clear the search"
-         aria-label="Clear the search">{{icon "close"}}</a>
+      {{/* Clearing is searching for nothing, which is the same verb with an
+           empty value -- not a link back to a folder that has to be named. */}}
+      <button type="submit" form="list-nav" formaction="/app/list/search" hx-post="/app/list/search"
+              name="q" value="" class="btn" title="Clear the search"
+              aria-label="Clear the search">{{icon "close"}}</button>
       {{end}}
 </div>{{end}}
 
@@ -116,7 +135,7 @@
 
 {{/* Pane 1B: the new-message button. */}}
 {{define "compose-bar"}}<div id="compose-bar" class="compose-bar"{{if .IsOOB "compose-bar"}} hx-swap-oob="true"{{end}}>
-    <a hx-boost="true" class="btn btn-compose" href="/app/compose?folder={{.Folder}}">
+    <a hx-boost="true" class="btn btn-compose" href="/app/compose">
       {{icon "compose"}} New message
     </a>
 </div>{{end}}
@@ -131,15 +150,24 @@
            in this sidebar and what is in the reading pane -- and nothing
            else, so the frame around all three stays where it is rather than
            being rebuilt and repainted. The other two come back with the
-           response as out-of-band swaps; see handleMailbox. */}}
-      <a hx-boost="true" hx-target="#list-pane" hx-swap="outerHTML"
-         class="folder" style="{{indent .Depth}}"
-         href="/app/mailbox?folder={{.Name}}"
-         {{if eq .Name $.Folder}}aria-current="true"{{end}}>
-        <span class="folder-icon" aria-hidden="true">{{folderIcon .}}</span>
-        <span class="folder-name">{{.Display}}</span>
-        {{if .Unseen}}<span class="folder-count">{{.Unseen}}</span>{{end}}
-      </a>
+           response as out-of-band swaps; see renderMailPanes.
+
+           **A form, not a link.** The server keeps which folder you are in, so
+           this posts the name of the folder being clicked and nothing else --
+           no current folder, no page, no open message. A form rather than an
+           anchor with hx-post because a form still works with scripting off:
+           it submits, the whole page comes back, and the app is usable. An
+           <a hx-post> would simply do nothing there. */}}
+      <form method="POST" action="/app/open/folder" class="folder-form"
+            hx-post="/app/open/folder" hx-target="#list-pane" hx-swap="outerHTML">
+        <input type="hidden" name="name" value="{{.Name}}">
+        <button type="submit" class="folder" style="{{indent .Depth}}"
+                {{if eq .Name $.Folder}}aria-current="true"{{end}}>
+          <span class="folder-icon" aria-hidden="true">{{folderIcon .}}</span>
+          <span class="folder-name">{{.Display}}</span>
+          {{if .Unseen}}<span class="folder-count">{{.Unseen}}</span>{{end}}
+        </button>
+      </form>
       {{end}}
     {{else}}
       {{/* Only when the list was actually fetched. A range's {{else}} takes no
@@ -154,7 +182,7 @@
 
 {{/* Pane 1D: the buttons along the bottom of the sidebar. */}}
 {{define "sidebar-tools"}}<div id="sidebar-tools" class="sidebar-foot"{{if .IsOOB "sidebar-tools"}} hx-swap-oob="true"{{end}}>
-    <a hx-boost="true" class="btn btn-sidebar" href="/app/mailbox?folder={{.Folder}}"
+    <a hx-boost="true" class="btn btn-sidebar" href="/app/"
        aria-label="Refresh the folder list">{{icon "reload"}} Refresh</a>
     {{/* A label, not a button: it toggles the checkbox above, which is what
          opens the dialog. No script involved -- see the note below. */}}
@@ -201,7 +229,7 @@
   {{range $.Folders}}
     {{if and .Selectable (ne .Name $.Folder)}}
     <li><button type="submit" class="drop-item"
-                formaction="/app/messages/action?action=move&amp;folder={{$.Folder | urlquery}}&amp;dest={{.Name | urlquery}}">
+                formaction="/app/do/move" hx-post="/app/do/move" name="dest" value="{{.Name}}">
       <span class="drop-icon" aria-hidden="true">{{folderIcon .}}</span>{{.Display}}
     </button></li>
     {{end}}
@@ -426,12 +454,24 @@
           that can be wrong. */}}
      {{if eq $.TimedRow .UID}}
      hx-post="/app/messages/read"
-     hx-vals='{"uid": "{{.UID}}", "folder": "{{$.Folder}}"}'
+     hx-vals='{"uid": "{{.UID}}"}'
      hx-trigger="load delay:{{$.MarkReadSeconds}}s"
      hx-target="this" hx-swap="outerHTML"
      {{end}}
 >
+  {{/* Checked from the SERVER's record, not from whatever the browser is
+       holding. The list is re-rendered under these boxes constantly -- every
+       action, every arrival, every out-of-band row swap -- and a tick the page
+       was remembering would be lost each time.
+
+       The tick posts to /app/list/select, which toggles and answers with this
+       row redrawn, so a request that goes missing corrects itself on the next
+       one. name="uid" stays: with scripting off nothing posts here, the boxes
+       are ordinary form controls, and the toolbar still acts on them. */}}
   <input type="checkbox" class="msg-check" name="uid" value="{{.UID}}"
+         {{if $.Mailbox}}{{if index $.Mailbox.Selected .UID}}checked{{end}}{{end}}
+         hx-post="/app/list/select" hx-vals='{"uid": "{{.UID}}"}'
+         hx-target="#msg-{{.UID}}" hx-swap="outerHTML"
          aria-label="Select the message from {{if .From}}{{.From}}{{else}}an unknown sender{{end}}">
   {{/* Every row is its own loader: the click aims at this row, so what comes
        back replaces it -- which is what takes the bold off and turns the
@@ -442,8 +482,22 @@
        at the pane instead meant naming an id that does not exist until
        something is already open, and from the mailbox the click did nothing
        at all. */}}
-  <a hx-boost="true" hx-target="#msg-{{.UID}}" hx-swap="outerHTML" class="msg"
-     href="/app/message/{{.UID}}?folder={{$.Folder}}{{if $.Mailbox}}{{if $.Mailbox.Page.Query}}&amp;q={{$.Mailbox.Page.Query}}{{end}}{{if $.Mailbox.Page.Sort}}&amp;sort={{$.Mailbox.Page.Sort}}{{end}}&amp;page={{$.Mailbox.Page.Page}}{{end}}"
+  {{/* The row posts its own UID and nothing else. That is the identity of the
+       thing being clicked rather than remembered state -- it cannot go stale,
+       because it travels with the click that uses it. The folder, the page,
+       the sort and the search used to ride along here too, on every row, and
+       are now the server's.
+
+       **form="open-msg", not a form around the button.** The rows live inside
+       the list's own form and forms cannot nest -- a <form> here would be
+       dropped by the parser, taking the row checkbox's name with it. The
+       attribute points at an empty form that sits outside the list form; the
+       button carries the uid as its own name/value, which is the one pair a
+       submit button gets, and is all this needs. Same device the search box
+       uses for the same reason. */}}
+  <button type="submit" class="msg" form="open-msg" name="uid" value="{{.UID}}"
+     hx-post="/app/open/message" hx-vals='{"uid": "{{.UID}}"}'
+     hx-target="#msg-{{.UID}}" hx-swap="outerHTML"
      {{if $.Reader}}{{if $.Reader.Message}}{{if eq $.Reader.Message.UID .UID}}aria-current="true"{{end}}{{end}}{{end}}>
     <span class="msg-line">
       <span class="msg-from">{{if .From}}{{.From}}{{else}}(no sender){{end}}</span>
@@ -457,7 +511,7 @@
         <span class="msg-size">{{humanSize .Size}}</span>
       </span>
     </span>
-  </a>
+  </button>
 </div>
 {{end}}{{end}}
 
@@ -489,10 +543,29 @@
        fields, and its visible controls sit in the card's header row carrying
        `form="list-search"`. That is what puts the search box inside the card,
        where the original has it, without either form swallowing the other. */}}
-  <form id="list-search" method="GET" action="/app/mailbox" role="search">
-    <input type="hidden" name="folder" value="{{.Folder}}">
-    {{if .Mailbox}}<input type="hidden" name="sort" value="{{.Mailbox.Page.Sort}}">{{end}}
-  </form>
+  {{/* Both empty on purpose. Controls scattered through the list reach them
+       with form="...", because the list itself is already a form and forms do
+       not nest -- see the note on the message row.
+
+       open-msg is submitted by every row's Open button, which supplies the uid
+       as its own name/value. list-nav is submitted by the sort menu, the
+       paginator and the Clear-search button, each of which likewise carries
+       its one pair. Neither needs a field of its own: there is nothing left to
+       tell the server that the server does not already know. */}}
+  <form id="open-msg" method="POST" action="/app/open/message"
+        hx-post="/app/open/message" hx-target="#app-body" hx-swap="outerHTML"></form>
+  <form id="list-nav" method="POST" action="/app/list/search"
+        hx-post="/app/list/search" hx-target="#app-body" hx-swap="outerHTML"></form>
+
+  {{/* The search box's own form, reached with form="list-search" from the
+       controls in the header row -- the box is drawn inside the list's card
+       and cannot be inside a second form there.
+
+       It needs its own hx-post and target: it sits OUTSIDE the list form, so
+       it inherits nothing from it, and without them pressing Enter in the box
+       is a real navigation that leaves the address bar on a POST-only URL. */}}
+  <form id="list-search" method="POST" action="/app/list/search" role="search"
+        hx-post="/app/list/search" hx-target="#app-body" hx-swap="outerHTML"></form>
 
   {{/* Everything below is ONE form posting to /app/messages/action, so the row
        checkboxes are what the toolbar buttons act on. Each button carries its
@@ -501,13 +574,12 @@
        pair of its own and these need two. Go's FormValue reads the query string
        as well as the body, so the two arrive together. No script is involved in
        any of it. */}}
-  <form method="POST" action="/app/messages/action" class="list-stack">
-  <input type="hidden" name="folder" value="{{.Folder}}">
-  {{if .Mailbox}}
-  <input type="hidden" name="page" value="{{.Mailbox.Page.Page}}">
-  <input type="hidden" name="q" value="{{.Mailbox.Page.Query}}">
-  <input type="hidden" name="sort" value="{{.Mailbox.Page.Sort}}">
-  {{end}}
+  {{/* No hidden fields. This form used to restate the folder, the page, the
+       search, the sort and the open message on every render, and post all five
+       back with every toolbar press -- so any control that forgot one silently
+       acted somewhere else. The server holds all of it now. */}}
+  <form method="POST" action="/app/do/seen" class="list-stack"
+        hx-target="#app-body" hx-swap="outerHTML">
 
   {{template "list-bar" .}}
 
@@ -518,21 +590,33 @@
     <p class="list-note">This mail server cannot sort; the list is in arrival order.</p>
     {{end}}
 
+    {{/* Why a button did nothing, said where the button is. The mail screen has
+         no flash area -- .Error in the reading pane is worded for "could not
+         reach the mail server" -- and an answer about the list belongs next to
+         the list anyway. */}}
+    {{if and .Mailbox .Mailbox.Notice}}
+    <p class="list-note list-note-warn" role="status">{{.Mailbox.Notice}}</p>
+    {{end}}
+
     {{template "message-list" .}}
 
     {{if .Mailbox}}
     <div class="list-foot">
       <span>{{.Mailbox.Page.Total}} message{{if ne .Mailbox.Page.Total 1}}s{{end}}</span>
       {{if gt .Mailbox.Page.Pages 1}}
+      {{/* A direction, not a page number. "The page after the one I am on" is
+           a question only the server can answer correctly, now that the server
+           is what knows which page that is -- and a number baked in here would
+           be wrong the moment anything changed how many pages there are. */}}
       <nav class="paginator" aria-label="Pages">
         {{if hasPrev .Mailbox.Page}}
-        <a hx-boost="true" class="page-btn" href="/app/mailbox?folder={{.Folder}}&amp;page={{sub .Mailbox.Page.Page 1}}{{if .Mailbox.Page.Query}}&amp;q={{.Mailbox.Page.Query}}{{end}}{{if .Mailbox.Page.Sort}}&amp;sort={{.Mailbox.Page.Sort}}{{end}}"
-           aria-label="Newer messages">‹</a>
+        <button type="submit" class="page-btn" form="list-nav"
+                formaction="/app/list/page/prev" hx-post="/app/list/page/prev" aria-label="Newer messages">‹</button>
         {{end}}
         <span class="page-at">{{.Mailbox.Page.Page}} / {{.Mailbox.Page.Pages}}</span>
         {{if hasNext .Mailbox.Page}}
-        <a hx-boost="true" class="page-btn" href="/app/mailbox?folder={{.Folder}}&amp;page={{add .Mailbox.Page.Page 1}}{{if .Mailbox.Page.Query}}&amp;q={{.Mailbox.Page.Query}}{{end}}{{if .Mailbox.Page.Sort}}&amp;sort={{.Mailbox.Page.Sort}}{{end}}"
-           aria-label="Older messages">›</a>
+        <button type="submit" class="page-btn" form="list-nav"
+                formaction="/app/list/page/next" hx-post="/app/list/page/next" aria-label="Older messages">›</button>
         {{end}}
       </nav>
       {{end}}

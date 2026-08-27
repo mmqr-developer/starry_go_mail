@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,8 +34,11 @@ func osHostname() (string, error) { return os.Hostname() }
 
 func (a *App) registerAppRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /app/{$}", a.handleMailbox)
-	mux.HandleFunc("GET /app/mailbox", a.handleMailbox)
-	mux.HandleFunc("GET /app/message/{uid}", a.handleMessage)
+	mux.HandleFunc("POST /app/open/message", a.handleOpenMessage)
+	mux.HandleFunc("POST /app/reader/next", a.handleReaderStep(false))
+	mux.HandleFunc("POST /app/reader/prev", a.handleReaderStep(true))
+	mux.HandleFunc("POST /app/reader/close", a.handleReaderClose)
+	mux.HandleFunc("POST /app/reader/view", a.handleReaderView)
 	mux.HandleFunc("GET /app/message/{uid}/body", a.handleMessageBody)
 	mux.HandleFunc("POST /app/messages/read", a.handleMarkRead)
 	mux.HandleFunc("GET /app/message/{uid}/source", a.handleMessageSource)
@@ -47,7 +51,14 @@ func (a *App) registerAppRoutes(mux *http.ServeMux) {
 	// they were separate handlers the single-message path grew a Trash
 	// fallback that the bulk path would not have had. One implementation
 	// cannot drift from itself.
-	mux.HandleFunc("POST /app/messages/action", a.handleMessageAction)
+	mux.HandleFunc("POST /app/open/folder", a.handleOpenFolder)
+	mux.HandleFunc("POST /app/list/page/next", a.handleListPage(1))
+	mux.HandleFunc("POST /app/list/page/prev", a.handleListPage(-1))
+	mux.HandleFunc("POST /app/list/sort", a.handleListSort)
+	mux.HandleFunc("POST /app/list/select", a.handleSelect)
+	mux.HandleFunc("POST /app/list/select/all", a.handleSelectAll)
+	mux.HandleFunc("POST /app/list/search", a.handleListSearch)
+	mux.HandleFunc("POST /app/do/{action}", a.handleMessageAction)
 
 	mux.HandleFunc("POST /app/folders/create", a.handleFolderCreate)
 
@@ -128,17 +139,6 @@ func (a *App) storedAccountsOnly(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// currentFolder resolves which folder a request is about, defaulting to INBOX.
-func currentFolder(r *http.Request) string {
-	if f := strings.TrimSpace(r.URL.Query().Get("folder")); f != "" {
-		return f
-	}
-	if f := strings.TrimSpace(r.FormValue("folder")); f != "" {
-		return f
-	}
-	return "INBOX"
-}
-
 // mailContext is the preamble every mail route needs: the shell data, the
 // selected account, and its decrypted IMAP password.
 //
@@ -164,11 +164,12 @@ func (a *App) mailContext(w http.ResponseWriter, r *http.Request, view, title st
 		a.renderView(w, r, d)
 		return nil, "", false
 	}
-	// Attach the admin panel's preset for this address, if there is one. Done
-	// per request rather than copied onto the account at creation time, so a
-	// workaround added by an administrator today reaches a mailbox attached
-	// last year -- which is the entire point of a per-server setting.
-	a.attachPreset(r, d.Account)
+	// The preset is NOT attached here. ResolveServers does it, on every path
+	// that loads an account (see the note on MailAccount.Preset), so doing it
+	// again per request was duplication -- and it was a data race: a direct
+	// session's account is one struct shared for the life of the session, and
+	// this wrote to it while the goroutine below read it through hasCap.
+	// Found by -race once the tests started driving real requests.
 
 	// Learn contacts from Sent, once per mailbox per process. In a goroutine
 	// because it is a fetch of headers proportional to the size of Sent, and
@@ -185,9 +186,20 @@ func (a *App) mailContext(w http.ResponseWriter, r *http.Request, view, title st
 // Mailbox
 // ---------------------------------------------------------------------------
 
+// handleMailbox answers GET /app/, which is the only addressable URL this
+// client has.
+//
+// It renders whatever the state says -- including the message that is open, if
+// one is. That is what makes a reload, the refresh timer and a newly opened
+// tab all land where the user actually is, now that no position travels in the
+// address bar.
 func (a *App) handleMailbox(w http.ResponseWriter, r *http.Request) {
 	d, imapPw, ok := a.mailContext(w, r, "mailbox", "Mail")
 	if !ok {
+		return
+	}
+	if a.viewOf(r).OpenUID != 0 {
+		a.renderReader(w, r, d, imapPw)
 		return
 	}
 	a.withMailFrame(r, d, imapPw)
@@ -202,11 +214,7 @@ func (a *App) handleMailbox(w http.ResponseWriter, r *http.Request) {
 	//   the reading pane -- because whatever was open in it belongs to the
 	//   folder you have left, and leaving it there is a message displayed
 	//   beside a list that does not contain it.
-	if paneRequest(r, "list-pane") {
-		d.View = "list"
-		d.OOB = append(d.OOB, "sidebar", "mailbox-pane")
-	}
-	a.renderView(w, r, d)
+	a.renderMailPanes(w, r, d)
 }
 
 // withMailFrame fills in the two panes that sit to the left of whatever is in
@@ -219,18 +227,280 @@ func (a *App) handleMailbox(w http.ResponseWriter, r *http.Request) {
 // real list pane with no messages -- which reads as a broken client rather
 // than as a composer.
 func (a *App) withMailFrame(r *http.Request, d *PageData, imapPw string) {
-	folder := currentFolder(r)
-	d.Folder = folder
 	a.withFolders(r, d)
+	a.withMessageList(r, d, imapPw)
+}
 
-	page, err := a.pool.ListMessages(d.Account, imapPw, folder,
-		r.URL.Query().Get("q"), atoiDefault(r.URL.Query().Get("page"), 1),
-		a.prefs(r).Int("general.messages_per_page"), r.URL.Query().Get("sort"))
+// withMessageList fills the middle pane from the server's own record of where
+// this browser is.
+//
+// **Nothing here reads the request.** Folder, page, sort and search all come
+// from viewState, which is the whole point: a page fetched by a click, by the
+// refresh timer, or by somebody reloading the tab all render the same thing,
+// because there is only one place that knows what "the same thing" is. It used
+// to read four query parameters, and any control that forgot one silently
+// moved the user somewhere else.
+//
+// Split from withMailFrame so a handler that has already loaded the folder
+// list -- to validate a folder name against it -- does not pay for a second
+// LIST.
+func (a *App) withMessageList(r *http.Request, d *PageData, imapPw string) {
+	v := a.viewOf(r)
+	d.Folder = v.Folder
+
+	page, err := a.pool.ListMessages(d.Account, imapPw, v.Folder,
+		v.Query, v.Page, a.prefs(r).Int("general.messages_per_page"), v.Sort)
 	if err != nil {
 		d.Error = err.Error()
 		page = &MessagePage{Page: 1, Pages: 1}
 	}
-	d.Mailbox = &MailboxVM{Page: page, Folder: folder}
+	// Record where we actually landed. ListMessages clamps a page number past
+	// the end of a folder, and without this the state would go on claiming a
+	// page that does not exist -- so every later render would be clamped again
+	// and Previous would step from a number nobody is looking at.
+	if page.Page != v.Page {
+		a.updateView(r, func(v *viewState) { v.Page = page.Page })
+	}
+	d.Mailbox = &MailboxVM{Page: page, Folder: v.Folder, Selected: v.Selected}
+}
+
+// folderOpenable reports whether this is a folder the user can actually be in.
+//
+// Every verb that takes a folder name checks it here first. The name arrives
+// in a request body, so it is input: without this, a crafted post would set the
+// session's folder to anything at all and every later render would carry the
+// resulting IMAP error. Checking against the list the server just read also
+// means a folder deleted in another client is refused rather than remembered.
+//
+// Stricter than folderNamed, which asks only whether the name exists: a
+// \Noselect node is a real folder that cannot be opened, so it is a legitimate
+// target for a rename and never for a click.
+func folderOpenable(folders []*Folder, name string) bool {
+	for _, f := range folders {
+		if f.Name == name && f.Selectable {
+			return true
+		}
+	}
+	return false
+}
+
+// handleOpenFolder is the sidebar: "show me this folder".
+//
+// The folder's name is in the body because the link *is* that folder -- naming
+// what you clicked is not remembered state, and cannot go stale, because it
+// travels with the click that uses it. What does not appear anywhere is the
+// folder the user is leaving, the page they were on, or what they had open.
+func (a *App) handleOpenFolder(w http.ResponseWriter, r *http.Request) {
+	d, imapPw, ok := a.mailContext(w, r, "mailbox", "Mail")
+	if !ok {
+		return
+	}
+	// Loaded first, because the name has to be checked against it.
+	a.withFolders(r, d)
+	if name := strings.TrimSpace(r.FormValue("name")); folderOpenable(d.Folders, name) {
+		// setFolder is what drops the page, the search, the open message and
+		// the selection -- all of which named things in the folder being left.
+		a.updateView(r, func(v *viewState) { v.setFolder(name) })
+	}
+	a.withMessageList(r, d, imapPw)
+	a.renderMailPanes(w, r, d)
+}
+
+// The message list's own controls: paging, sorting and searching.
+//
+// All three change where the user is and nothing else, so all three read
+// nothing about position out of the request. Paging in particular sends a
+// direction rather than a number -- "the page after the one I am on" is a
+// question only the server can answer correctly once it is the server that
+// knows which page that is.
+
+// handleListPage steps one page in either direction.
+func (a *App) handleListPage(by int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		d, imapPw, ok := a.mailContext(w, r, "mailbox", "Mail")
+		if !ok {
+			return
+		}
+		a.updateView(r, func(v *viewState) {
+			v.Page += by
+			// Leaving the page also leaves whatever was open on it: the
+			// reading pane would otherwise show a message the list beside it
+			// no longer contains. withMessageList clamps a page past the end.
+			v.OpenUID = 0
+			v.TimedRow = 0
+			v.Selected = map[uint32]bool{}
+		})
+		a.withMailFrame(r, d, imapPw)
+		a.renderMailPanes(w, r, d)
+	}
+}
+
+// handleListSort reorders the folder. The order named is what was clicked.
+func (a *App) handleListSort(w http.ResponseWriter, r *http.Request) {
+	d, imapPw, ok := a.mailContext(w, r, "mailbox", "Mail")
+	if !ok {
+		return
+	}
+	if by := sortOptionNamed(r.FormValue("by")); by != "" {
+		a.updateView(r, func(v *viewState) {
+			v.Sort = by
+			// A different order is a different page 1, and the message that
+			// was open is very unlikely to still be on it.
+			v.Page = 1
+			v.OpenUID = 0
+			v.Selected = map[uint32]bool{}
+		})
+	}
+	a.withMailFrame(r, d, imapPw)
+	a.renderMailPanes(w, r, d)
+}
+
+// maxSearchRunes bounds what is handed to the mail server's SEARCH. Long
+// enough that nobody types past it, short enough that nobody scripts a
+// megabyte into it.
+const maxSearchRunes = 200
+
+// handleListSearch is the one control whose value is genuinely the user's own
+// text rather than a name for something on the page.
+func (a *App) handleListSearch(w http.ResponseWriter, r *http.Request) {
+	d, imapPw, ok := a.mailContext(w, r, "mailbox", "Mail")
+	if !ok {
+		return
+	}
+	q := strings.TrimSpace(r.FormValue("q"))
+	// Bounded, and cut on a rune boundary rather than a byte one. Slicing a
+	// UTF-8 string at a byte offset can land in the middle of a character, and
+	// the half-rune then travels to the mail server and comes back into the
+	// search box as a replacement character.
+	if runes := []rune(q); len(runes) > maxSearchRunes {
+		q = string(runes[:maxSearchRunes])
+	}
+	a.updateView(r, func(v *viewState) {
+		v.Query = q
+		v.Page = 1
+		v.OpenUID = 0
+		v.Selected = map[uint32]bool{}
+	})
+	a.withMailFrame(r, d, imapPw)
+	a.renderMailPanes(w, r, d)
+}
+
+// The selection, which the server holds.
+//
+// **Why the server and not the checkboxes.** A ticked box is state living in
+// the browser, and it disagrees with the server the moment the list is
+// re-rendered underneath it -- which happens on every action, every page of
+// new mail, and every out-of-band row swap. Holding it here means each
+// checkbox is DRAWN from the record rather than remembered by the page, so a
+// re-render cannot lose a tick and a lost request corrects itself on the next
+// one.
+//
+// The checkboxes keep their name="uid" inside the list's form, and
+// selectedUIDs still reads that first. That is the path with scripting off:
+// the boxes are ordinary form controls, they post with the button, and the
+// toolbar works one page at a time exactly as it always did.
+
+// handleSelect ticks or unticks one row.
+//
+// It toggles rather than being told on or off, because a checkbox cannot say
+// "I am now unchecked" in a form post -- an unticked box sends nothing at all.
+// The answer is the row, redrawn from the record, so what is on screen is
+// always what the server thinks rather than what the browser did.
+func (a *App) handleSelect(w http.ResponseWriter, r *http.Request) {
+	d, imapPw, ok := a.mailContext(w, r, "mailbox", "Mail")
+	if !ok {
+		return
+	}
+	uid, valid := parseUID(r.FormValue("uid"))
+	if !valid {
+		http.Error(w, "no message named", http.StatusBadRequest)
+		return
+	}
+	a.updateView(r, func(v *viewState) { v.selectUID(uid, !v.Selected[uid]) })
+	a.renderRow(w, r, d, imapPw, uid)
+}
+
+// handleSelectAll ticks every row on this page, or clears them if they are
+// already all ticked.
+//
+// "This page", not the folder: the toolbar acts on what is selected, and a
+// selection reaching past what anybody can see is how somebody archives four
+// hundred messages meaning to archive twelve.
+func (a *App) handleSelectAll(w http.ResponseWriter, r *http.Request) {
+	d, imapPw, ok := a.mailContext(w, r, "mailbox", "Mail")
+	if !ok {
+		return
+	}
+	a.withMailFrame(r, d, imapPw)
+	if d.Mailbox == nil || d.Mailbox.Page == nil {
+		a.renderMailPanes(w, r, d)
+		return
+	}
+	onPage := make([]uint32, 0, len(d.Mailbox.Page.Messages))
+	for _, m := range d.Mailbox.Page.Messages {
+		onPage = append(onPage, m.UID)
+	}
+	v := a.updateView(r, func(v *viewState) {
+		all := len(onPage) > 0
+		for _, uid := range onPage {
+			if !v.Selected[uid] {
+				all = false
+				break
+			}
+		}
+		v.Selected = map[uint32]bool{}
+		if !all {
+			for _, uid := range onPage {
+				v.selectUID(uid, true)
+			}
+		}
+	})
+	d.Mailbox.Selected = v.Selected
+
+	// The box that was clicked lives in the search bar, so that is the target;
+	// the rows follow out of band. See the note on which element a click aims
+	// at in the message row.
+	if paneRequest(r, "list-search-bar") {
+		d.View = "list-search-bar"
+		d.OOB = append(d.OOB, "message-list")
+		a.renderView(w, r, d)
+		return
+	}
+	a.renderMailPanes(w, r, d)
+}
+
+// renderRow answers with one row of the message list, redrawn.
+func (a *App) renderRow(w http.ResponseWriter, r *http.Request, d *PageData, imapPw string, uid uint32) {
+	a.withMessageList(r, d, imapPw)
+	for _, m := range d.Mailbox.Page.Messages {
+		if m.UID == uid {
+			d.Row = m
+			break
+		}
+	}
+	if d.Row == nil {
+		// The row has gone from under the tick -- moved or expunged elsewhere.
+		// Redraw the list rather than answering with nothing.
+		a.renderMailPanes(w, r, d)
+		return
+	}
+	d.View = "list-row"
+	a.renderView(w, r, d)
+}
+
+// renderMailPanes answers a navigation that changed the message list.
+//
+// Shared by every list-level verb, because they all change the same three
+// things and for the same reasons: the list itself, the sidebar (the highlight
+// moves and the unread counts have just been re-read), and the reading pane
+// (whatever was in it belongs to the folder or page just left, and leaving it
+// there is a message displayed beside a list that does not contain it).
+func (a *App) renderMailPanes(w http.ResponseWriter, r *http.Request, d *PageData) {
+	if paneRequest(r, "list-pane") {
+		d.View = "list"
+		d.OOB = append(d.OOB, "sidebar", "mailbox-pane")
+	}
+	a.renderView(w, r, d)
 }
 
 // ---------------------------------------------------------------------------
@@ -278,8 +548,10 @@ func (a *App) handleFolderCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	a.log.Info("folder created", "account", d.Account.Email, "folder", full)
 	// Straight to the new folder. It is empty, which is the clearest possible
-	// confirmation that it now exists.
-	a.redirect(w, r, "/app/mailbox?folder="+urlQueryEscape(full))
+	// confirmation that it now exists. Recorded rather than named in a URL:
+	// /app/ renders wherever the state says the user is.
+	a.updateView(r, func(v *viewState) { v.setFolder(full) })
+	a.redirect(w, r, "/app/")
 }
 
 // protectedFolderLeaves are folder names this app refuses to rename or delete,
@@ -333,30 +605,134 @@ func folderNamed(folders []*Folder, name string) bool {
 // Reading
 // ---------------------------------------------------------------------------
 
-func (a *App) handleMessage(w http.ResponseWriter, r *http.Request) {
+// The reader's entry points.
+//
+// Each one changes where the user is and then hands over to renderReader,
+// which draws whatever the state now says. None of them takes the app's idea
+// of position from the request: open/message names the row that was clicked
+// -- which is what the click is about, and cannot go stale because it travels
+// with the click -- and next, prev and close name nothing at all.
+
+// handleOpenMessage is a click on a row in the message list.
+func (a *App) handleOpenMessage(w http.ResponseWriter, r *http.Request) {
 	d, imapPw, ok := a.mailContext(w, r, "reader", "Mail")
 	if !ok {
 		return
 	}
-	folder := currentFolder(r)
-	d.Folder = folder
-
-	uid, valid := parseUID(r.PathValue("uid"))
+	uid, valid := parseUID(r.FormValue("uid"))
 	if !valid {
 		http.NotFound(w, r)
 		return
 	}
-	uid64 := int64(uid)
-	msg, err := a.fetchMessage(r, d.Account, imapPw, folder, uint32(uid64))
+	a.updateView(r, func(v *viewState) {
+		v.OpenUID = uid
+		// A newly opened message starts on the deployment's default rung.
+		// Climbing the ladder is a decision about one message, not a setting
+		// that then applies to every sender afterwards.
+		v.View = ""
+	})
+	a.renderReader(w, r, d, imapPw)
+}
+
+// handleReaderStep is Previous and Next.
+//
+// **This is the case the whole refactor was asked for.** The buttons carry no
+// UID. The server takes the message it knows is open, reads the page of the
+// list it would draw anyway, and steps within it -- so the answer is computed
+// from the list as it is now rather than from a number frozen into a button
+// when the page was last drawn.
+func (a *App) handleReaderStep(back bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		d, imapPw, ok := a.mailContext(w, r, "reader", "Mail")
+		if !ok {
+			return
+		}
+		v := a.viewOf(r)
+		page, err := a.pool.ListMessages(d.Account, imapPw, v.Folder, v.Query,
+			v.Page, a.prefs(r).Int("general.messages_per_page"), v.Sort)
+		if err != nil {
+			a.fail(w, r, err)
+			return
+		}
+		prev, next := neighbours(page, v.OpenUID)
+		step := next
+		if back {
+			step = prev
+		}
+		if step != 0 {
+			a.updateView(r, func(v *viewState) {
+				v.OpenUID = step
+				v.View = ""
+			})
+		}
+		// A step off the end of the page renders the message that is still
+		// open, which is what the disabled button already said would happen.
+		a.renderReader(w, r, d, imapPw)
+	}
+}
+
+// handleReaderClose puts the reading pane back to its "select a message" card.
+func (a *App) handleReaderClose(w http.ResponseWriter, r *http.Request) {
+	d, imapPw, ok := a.mailContext(w, r, "mailbox", "Mail")
+	if !ok {
+		return
+	}
+	a.updateView(r, func(v *viewState) {
+		v.OpenUID = 0
+		v.View = ""
+		v.TimedRow = 0
+	})
+	a.withMailFrame(r, d, imapPw)
+	a.renderMailPanes(w, r, d)
+}
+
+// handleReaderView climbs the body ladder: plain, sanitised HTML, embedded
+// images, remote images. The rung is named because it is what was clicked.
+func (a *App) handleReaderView(w http.ResponseWriter, r *http.Request) {
+	d, imapPw, ok := a.mailContext(w, r, "reader", "Mail")
+	if !ok {
+		return
+	}
+	if want := bodyViewNamed(r.FormValue("view")); want != "" {
+		a.updateView(r, func(v *viewState) { v.View = want })
+	}
+	a.renderReader(w, r, d, imapPw)
+}
+
+// renderReader draws the message the state says is open.
+//
+// Nothing here reads a position out of the request. If no message is open --
+// or the one that was has been moved or deleted since, by another session or
+// by a rule on the server -- it falls back to the message list rather than
+// showing a stale message or a not-found page. That check is only possible
+// because the server holds the UID: a UID baked into markup has no way to
+// notice it has stopped naming anything.
+func (a *App) renderReader(w http.ResponseWriter, r *http.Request, d *PageData, imapPw string) {
+	v := a.viewOf(r)
+	folder := v.Folder
+	d.Folder = folder
+	d.View = "reader"
+	d.Title = "Mail"
+
+	if v.OpenUID == 0 {
+		a.withMailFrame(r, d, imapPw)
+		a.renderMailPanes(w, r, d)
+		return
+	}
+	uid64 := int64(v.OpenUID)
+	msg, err := a.fetchMessage(r, d.Account, imapPw, folder, v.OpenUID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
-			http.NotFound(w, r)
+			// Gone since it was opened. Forget it and show the folder, which
+			// is where the user actually is.
+			a.updateView(r, func(v *viewState) { v.OpenUID = 0; v.View = "" })
+			a.withMailFrame(r, d, imapPw)
+			a.renderMailPanes(w, r, d)
 			return
 		}
 		a.fail(w, r, err)
 		return
 	}
-
 	// A message in Drafts is not something to read, it is something to finish.
 	// Opening it hands it back to the composer rather than the reader -- which
 	// is also what makes the autosave a round trip rather than a one-way
@@ -368,10 +744,15 @@ func (a *App) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Which rung of the view ladder this message opens on. Per request rather
-	// than remembered, so climbing it is a decision about one message rather
-	// than a setting that quietly applies to every sender afterwards.
-	view := resolveBodyView(msg, parseBodyView(r, a.defaultBodyView(a.prefs(r))))
+	// Which rung of the view ladder this message opens on. From the state,
+	// which handleOpenMessage clears on every new message -- so climbing the
+	// ladder stays a decision about one message rather than a setting that
+	// quietly applies to every sender afterwards.
+	want := v.View
+	if want == "" {
+		want = a.defaultBodyView(a.prefs(r))
+	}
+	view := resolveBodyView(msg, want)
 	body := renderBody(msg, view, a.prefs(r).Bool("reading.strip_colors"))
 
 	// The delay the reader is to apply, in seconds. Zero means it was already
@@ -383,7 +764,14 @@ func (a *App) handleMessage(w http.ResponseWriter, r *http.Request) {
 		Message: msg,
 		Body:    body,
 		View:    view,
-		BodyURL: bodyURLFor(uid64, folder, view),
+		BodyURL: bodyURLFor(uid64, view),
+	}
+	// The envelope addresses, when this mailbox asks for them. Parsed from the
+	// raw message here rather than in the template, so the headers are read
+	// once per render rather than once per field.
+	if a.prefs(r).Bool("reading.show_envelope") {
+		d.Reader.EnvelopeFrom = firstHeader(msg.Raw, "Return-Path")
+		d.Reader.EnvelopeTo = firstHeader(msg.Raw, "Delivered-To")
 	}
 
 	// The reader renders the whole three-pane frame, so it needs the sidebar
@@ -414,13 +802,13 @@ func (a *App) handleMessage(w http.ResponseWriter, r *http.Request) {
 	// come back with both buttons missing. Only the folder list is skipped,
 	// and only while nothing has happened that would change its counts.
 	page, lerr := a.pool.ListMessages(d.Account, imapPw, folder,
-		r.URL.Query().Get("q"), atoiDefault(r.URL.Query().Get("page"), 1),
-		a.prefs(r).Int("general.messages_per_page"), r.URL.Query().Get("sort"))
+		v.Query, v.Page, a.prefs(r).Int("general.messages_per_page"), v.Sort)
 	if lerr != nil {
 		page = &MessagePage{Page: 1, Pages: 1}
 	}
-	d.Mailbox = &MailboxVM{Page: page, Folder: folder}
-	d.Reader.Prev, d.Reader.Next = neighbours(page, uint32(uid64))
+	d.Mailbox = &MailboxVM{Page: page, Folder: folder, Selected: v.Selected}
+	prev, next := neighbours(page, uint32(uid64))
+	d.Reader.HasPrev, d.Reader.HasNext = prev != 0, next != 0
 	switch {
 	case row:
 		// The row is the answer; the reading pane rides along out-of-band.
@@ -510,7 +898,7 @@ func (a *App) handleMessage(w http.ResponseWriter, r *http.Request) {
 		//
 		// The row itself is taken from the page fetched above, so knowing
 		// about it costs no extra trip.
-		if prev := a.timed.set(sessionKey(r), d.TimedRow); prev != 0 {
+		if prev := a.setTimedRow(r, d.TimedRow); prev != 0 {
 			for _, sum := range page.Messages {
 				if sum.UID == prev {
 					d.PrevRow = sum
@@ -669,19 +1057,61 @@ func (a *App) handleMessageAction(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	folder := currentFolder(r)
-	action := strings.TrimSpace(r.FormValue("action"))
-
-	uids := make([]uint32, 0, 8)
-	for _, v := range r.Form["uid"] {
-		if n, valid := parseUID(v); valid {
-			uids = append(uids, n)
-		}
+	// Parsed explicitly, and it has to be.
+	//
+	// r.Form is filled in as a side effect of FormValue, and this handler
+	// stopped calling it the moment the verb moved into the path -- so
+	// selectedUIDs was reading a nil map. Nothing looked wrong, because the
+	// server's own record covered for it; what had silently stopped working
+	// was the no-script path, where the ticked checkboxes arrive in the body
+	// and are the only thing that says which messages to act on.
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "could not read the form", http.StatusBadRequest)
+		return
 	}
+	v := a.viewOf(r)
+	folder := v.Folder
+	action := strings.TrimSpace(r.PathValue("action"))
+
+	uids := selectedUIDs(r.Form, v)
 
 	// The folder list is needed to resolve Archive, Junk and Trash by their
 	// SPECIAL-USE attribute, and reloadMailbox will want it anyway.
 	a.withFolders(r, d)
+
+	// An empty selection is still not an error -- pressing Delete with nothing
+	// ticked is a misclick, and answering a misclick with a 400 page loses the
+	// user their place. But it must not be SILENT: every action below returns
+	// nil for an empty UID set, so the list came back identical and the only
+	// available reading was that the button does not work.
+	//
+	// seen-all is the exception because it is the one action that is about the
+	// folder rather than the selection.
+	if len(uids) == 0 && action != "seen-all" {
+		a.reloadMailbox(w, r, d, imapPw, folder,
+			"Nothing was selected, so nothing happened. Tick a message in the "+
+				"list, or open one, and press the button again.")
+		return
+	}
+
+	acted := make(map[uint32]bool, len(uids))
+	for _, uid := range uids {
+		acted[uid] = true
+	}
+
+	// If the message being read is about to leave the folder, work out what to
+	// open in its place -- BEFORE it goes, while the list still contains it.
+	// Afterwards there is no row to be next to.
+	//
+	// One extra listing, and only on the path that needs it: an action that
+	// moves something, with a message open, that is the message being moved.
+	var successor uint32
+	if messageLeavesFolder[action] && v.OpenUID != 0 && acted[v.OpenUID] {
+		if page, lerr := a.pool.ListMessages(d.Account, imapPw, folder, v.Query,
+			v.Page, a.prefs(r).Int("general.messages_per_page"), v.Sort); lerr == nil {
+			successor = successorAfter(page, v.OpenUID, acted)
+		}
+	}
 
 	var err error
 	switch action {
@@ -711,9 +1141,19 @@ func (a *App) handleMessageAction(w http.ResponseWriter, r *http.Request) {
 		// IMAP does not record one.
 		err = a.pool.MoveMessages(d.Account, imapPw, folder, uids, "INBOX")
 	case "move":
+		// Checked against the folder list, the same way handleOpenFolder
+		// checks the folder being opened. The destination arrives in a request
+		// body, so it is input: the menu only ever offers real folders, but
+		// the endpoint is what has to enforce that, not the menu.
+		//
+		// Nothing worse than a confusing error was reachable here -- go-imap
+		// sends a name it cannot quote as a length-prefixed literal, so a
+		// crafted value cannot break out of the command -- but "this folder
+		// does not exist" is a better answer than whatever the mail server
+		// says about a mailbox nobody has.
 		dest := strings.TrimSpace(r.FormValue("dest"))
-		if dest == "" {
-			http.Error(w, "no destination", http.StatusBadRequest)
+		if !folderOpenable(d.Folders, dest) {
+			http.Error(w, "no such folder", http.StatusBadRequest)
 			return
 		}
 		err = a.pool.MoveMessages(d.Account, imapPw, folder, uids, dest)
@@ -728,19 +1168,166 @@ func (a *App) handleMessageAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Starring from the reader keeps the message open, which is what the
-	// original does and what anyone expects from a control that toggles.
-	// **Only starring.** "Mark unread" cannot stay: re-rendering the reader
-	// runs the mark-read-on-open rule and undoes it on the spot, which reads
-	// as the button not working. Everything else has moved the message out of
-	// this folder, so there is nothing to go back to.
-	if stay := strings.TrimSpace(r.FormValue("stay")); stay != "" &&
-		(action == "flag" || action == "unflag") {
-		a.redirect(w, r, fmt.Sprintf("/app/message/%s?folder=%s&view=%s",
-			stay, urlQueryEscape(folder), urlQueryEscape(r.FormValue("view"))))
+	// Whether the reading pane can survive this.
+	//
+	// Two different reasons it cannot, and they are worth keeping apart:
+	//
+	//   The action moved the message somewhere else, so there is nothing left
+	//   in this folder to go back to.
+	//
+	//   "Mark unread" left it exactly where it was, and still cannot stay:
+	//   re-rendering the reader runs the mark-read-on-open rule and undoes it
+	//   on the spot, which reads as the button not working.
+	//
+	// Everything else -- starring, marking read, marking the whole folder read
+	// -- leaves the message where it is and readable, so the pane stays.
+	//
+	// This used to need a hidden `stay` field naming the message to return to,
+	// and a redirect built out of it. The server knows which message is open,
+	// so what is left is the decision itself.
+	closes := action == "unseen" || messageLeavesFolder[action]
+	// Only the toolbar that acted on the selection spends it. A press in the
+	// reader means "this message" and never touched the ticks, so clearing
+	// them there would quietly undo work the user has done in the list.
+	onSelection := r.Form.Get("scope") != "open"
+	a.updateView(r, func(v *viewState) {
+		// The selection is spent. Whatever it named has been moved, flagged or
+		// deleted, and leaving it in place would let the next press act a
+		// second time -- after a move, on whatever now holds those numbers in
+		// this folder, which would be somebody else's mail.
+		if onSelection {
+			v.Selected = map[uint32]bool{}
+		}
+		if closes && v.OpenUID != 0 && acted[v.OpenUID] {
+			// Straight on to the next message, rather than back to an empty
+			// pane. Filing a mailbox is a run of decisions about one message
+			// after another, and stopping to click the next one each time is
+			// most of the work.
+			//
+			// successor is zero when there is nothing left to move to, and for
+			// every action that does not move anything -- so "mark unread"
+			// still empties the pane, because re-rendering the reader would
+			// mark the message read again on the spot.
+			v.OpenUID, v.View, v.TimedRow = successor, "", 0
+		}
+	})
+	// **Whatever is still open is still drawn.** Rendering the mailbox here
+	// while the state said a message was open put the two out of step: the
+	// reading pane cleared, and the next reload brought the message straight
+	// back. That disagreement between what is on screen and what the server
+	// holds is the whole class of bug this arrangement exists to remove, so it
+	// is not something to leave in the one handler that mutates most.
+	if a.viewOf(r).OpenUID != 0 {
+		a.renderReader(w, r, d, imapPw)
 		return
 	}
-	a.reloadMailbox(w, r, d, imapPw, folder)
+	a.reloadMailbox(w, r, d, imapPw, folder, "")
+}
+
+// successorAfter picks what to read next when the open message leaves the
+// folder.
+//
+// **The row above, and failing that the row below.** In the default order that
+// is the next newer message, falling back to the next older one when the
+// message filed was already the newest -- which is what somebody working down
+// a mailbox means by "the next one". Under another sort it is still the row
+// above, which is still what the list showed next to it.
+//
+// Messages in `gone` are skipped: a selection of several is moved in one
+// press, and landing on another one that has just left would be worse than
+// landing nowhere. Zero means there is nothing left to move to, and the
+// reading pane goes back to its card.
+func successorAfter(page *MessagePage, open uint32, gone map[uint32]bool) uint32 {
+	if page == nil {
+		return 0
+	}
+	at := -1
+	for i, m := range page.Messages {
+		if m.UID == open {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return 0
+	}
+	// Upward first -- nearer the top of the list is newer.
+	for i := at - 1; i >= 0; i-- {
+		if !gone[page.Messages[i].UID] {
+			return page.Messages[i].UID
+		}
+	}
+	for i := at + 1; i < len(page.Messages); i++ {
+		if !gone[page.Messages[i].UID] {
+			return page.Messages[i].UID
+		}
+	}
+	return 0
+}
+
+// messageLeavesFolder is the set of verbs that take a message out of the
+// folder it is in, so the reading pane cannot go on showing it.
+//
+// A map rather than a switch inside the handler because the reader's toolbar
+// and the list's toolbar both post these, and "does this move the message"
+// needs one answer for both.
+var messageLeavesFolder = map[string]bool{
+	"archive": true, "spam": true, "spam-seen": true,
+	"notspam": true, "move": true, "delete": true,
+}
+
+// selectedUIDs is what a toolbar press acts on: the ticked rows, or -- when
+// none are ticked -- the message that is open.
+//
+// **The fallback is the fix for four buttons that looked broken.** Opening a
+// message and then pressing Junk, Trash, Move or Mark-unread in the list's
+// toolbar used to post an empty UID set, which every Pool method answers with
+// nil, which redraws the list unchanged. Nothing was wrong with any of those
+// handlers -- there was simply nothing for them to act on, and no way to tell
+// that from a button that does nothing. The open message now comes from the
+// view state rather than from a hidden field the page was carrying, so it is
+// right even when the page was drawn before the message was opened.
+//
+// A ticked row always wins, and the two are never combined. Acting on a
+// message somebody did not tick, because it happened to be on screen, is a
+// worse failure than doing nothing: it is the one they cannot undo.
+//
+// Takes the form and a snapshot rather than the request, so the rule can be
+// tested directly -- it is the part with the cases in it.
+func selectedUIDs(form url.Values, v viewState) []uint32 {
+	// The reader's toolbar says so, and means the message being read.
+	//
+	// Both toolbars post the same verbs to the same endpoints, so without this
+	// they resolve the same way -- and a row ticked over in the list hijacks
+	// the star, the archive and the delete in the reader, which act on a
+	// message the user is not looking at. `scope` is a constant in that
+	// toolbar's markup: it describes the control, not a position, so it cannot
+	// go stale the way a message id does.
+	if form.Get("scope") == "open" {
+		if v.OpenUID == 0 {
+			return nil
+		}
+		return []uint32{v.OpenUID}
+	}
+	// The checkboxes as posted, which is the path with scripting off: they are
+	// ordinary form controls and travel with the button that was pressed.
+	uids := make([]uint32, 0, 8)
+	for _, val := range form["uid"] {
+		if n, valid := parseUID(val); valid {
+			uids = append(uids, n)
+		}
+	}
+	// Otherwise the server's own record. With scripting on these two agree --
+	// each tick posted here as it happened -- but the record is the one that
+	// survives the list being re-rendered, and the one a select-all can reach.
+	if len(uids) == 0 {
+		uids = append(uids, v.selectedUIDs()...)
+	}
+	// And failing both, the message in the reading pane.
+	if len(uids) == 0 && v.OpenUID != 0 {
+		uids = append(uids, v.OpenUID)
+	}
+	return uids
 }
 
 // moveToSpecial moves messages to a folder identified by its SPECIAL-USE
@@ -786,7 +1373,7 @@ func specialFolderName(folders []*Folder, special string) string {
 
 // reloadMailbox re-renders the list after a mutation, so the row reflects what
 // just happened without a second request from the browser.
-func (a *App) reloadMailbox(w http.ResponseWriter, r *http.Request, d *PageData, imapPw, folder string) {
+func (a *App) reloadMailbox(w http.ResponseWriter, r *http.Request, d *PageData, imapPw, folder, notice string) {
 	d.View = "mailbox"
 	d.Folder = folder
 	a.withFolders(r, d)
@@ -797,7 +1384,8 @@ func (a *App) reloadMailbox(w http.ResponseWriter, r *http.Request, d *PageData,
 		d.Error = err.Error()
 		page = &MessagePage{Page: 1, Pages: 1}
 	}
-	d.Mailbox = &MailboxVM{Page: page, Folder: folder}
+	d.Mailbox = &MailboxVM{Page: page, Folder: folder, Notice: notice,
+		Selected: a.viewOf(r).Selected}
 	a.renderView(w, r, d)
 }
 
@@ -881,7 +1469,7 @@ func (a *App) handleReply(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	folder := currentFolder(r)
+	folder := a.viewOf(r).Folder
 	uid, valid := parseUID(r.PathValue("uid"))
 	if !valid {
 		http.NotFound(w, r)
@@ -956,7 +1544,7 @@ func (a *App) handleForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid64 := int64(uid)
-	msg, err := a.fetchMessage(r, d.Account, imapPw, currentFolder(r), uint32(uid64))
+	msg, err := a.fetchMessage(r, d.Account, imapPw, a.viewOf(r).Folder, uint32(uid64))
 	if err != nil {
 		a.fail(w, r, err)
 		return
@@ -1057,7 +1645,7 @@ func buildReferences(parentRefs, parentID string) string {
 const referencesMax = 20
 
 func (a *App) handleComposeClose(w http.ResponseWriter, r *http.Request) {
-	a.redirect(w, r, "/app/mailbox?folder="+urlQueryEscape(currentFolder(r)))
+	a.redirect(w, r, "/app/")
 }
 
 // draftFromForm reads the composer's fields. Shared by send and autosave so
@@ -1233,7 +1821,7 @@ func (a *App) draftSaveReply(w http.ResponseWriter, r *http.Request, uid uint32,
 		return
 	}
 	// The button, so show them where it went.
-	a.redirect(w, r, "/app/mailbox?folder="+urlQueryEscape(currentFolder(r))+"&saved=1")
+	a.redirect(w, r, "/app/?saved=1")
 }
 
 func (a *App) handleSend(w http.ResponseWriter, r *http.Request) {
@@ -1348,7 +1936,7 @@ func (a *App) handleSend(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	a.redirect(w, r, "/app/mailbox?folder="+urlQueryEscape(currentFolder(r))+"&sent=1")
+	a.redirect(w, r, "/app/?sent=1")
 }
 
 func (a *App) sentFolderFor(acct *MailAccount, imapPw string) string {
@@ -1674,6 +2262,7 @@ func (a *App) userPrefs(p *Prefs) map[string]string {
 		"check_interval":    strconv.Itoa(p.Int("general.check_interval_seconds")),
 		"mark_read_seconds": strconv.Itoa(p.Int("general.mark_read_seconds")),
 		"strip_colors":      boolAttr(p.Bool("reading.strip_colors")),
+		"show_envelope":     boolAttr(p.Bool("reading.show_envelope")),
 
 		"ollama_host":           strings.TrimSpace(a.settings.String("ollama.host")),
 		"ollama_model":          strings.TrimSpace(p.String("ollama.model")),
@@ -1756,6 +2345,7 @@ func (a *App) handleSettingsGeneral(w http.ResponseWriter, r *http.Request) {
 	}
 	setField("general.mark_read_seconds", "mark_read_seconds")
 	set("reading.strip_colors", checkboxValue(r, "strip_colors"))
+	set("reading.show_envelope", checkboxValue(r, "show_envelope"))
 
 	a.log.Info("general settings saved",
 		"mark_read_seconds", a.prefs(r).Int("general.mark_read_seconds"))
@@ -2168,7 +2758,7 @@ func (a *App) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "which message?", http.StatusBadRequest)
 		return
 	}
-	folder := strings.TrimSpace(r.FormValue("folder"))
+	folder := a.viewOf(r).Folder
 	if folder == "" {
 		http.Error(w, "which folder?", http.StatusBadRequest)
 		return
@@ -2195,7 +2785,7 @@ func (a *App) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 	}
 	// Whatever happened, this session's timer has fired: it is not coming
 	// back, so there is nothing left to kill.
-	a.timed.clear(sessionKey(r))
+	a.setTimedRow(r, 0)
 
 	d.Row = sum
 	// The row draws itself as the open one from .Reader, so the message being
@@ -3180,8 +3770,14 @@ func (a *App) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// Erase the credentials before the cookie, not after: clearing the cookie
 	// only stops the browser naming the session, while this is the step that
 	// makes "signed out" mean the password is gone from this process.
-	if cl, ok := a.parseSession(r); ok && cl.SID != "" {
-		a.endDirectSession(a.direct.remove(cl.SID))
+	if cl, ok := a.parseSession(r); ok {
+		if cl.SID != "" {
+			a.endDirectSession(a.direct.remove(cl.SID))
+		}
+		// Where they were in the mailbox goes with the session. Read from the
+		// token rather than through sessionKey, because /logout is not behind
+		// requireAuth and so has no view id on its context.
+		a.views.forget(cl.VID)
 	}
 	a.clearSession(w)
 	// The inactivity timer signs out through this same route, and it wants a
@@ -3276,7 +3872,7 @@ func (a *App) handleMessageBody(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	folder := currentFolder(r)
+	folder := a.viewOf(r).Folder
 	uid, valid := parseUID(r.PathValue("uid"))
 	if !valid {
 		http.NotFound(w, r)
@@ -3289,6 +3885,32 @@ func (a *App) handleMessageBody(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := resolveBodyView(msg, parseBodyView(r, a.defaultBodyView(a.prefs(r))))
+
+	// The raw view is the message's own bytes, served as text.
+	//
+	// **text/plain, not markup wrapped around it.** The whole point is that
+	// nothing is interpreted, and a header or a MIME part that happened to
+	// contain markup must be shown as the characters it is rather than
+	// rendered. The same headers the source endpoint uses, for the same
+	// reasons: nosniff so the browser cannot decide this is HTML after all,
+	// and a sandbox with no sources of anything.
+	if view.IsSource() {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		// **frame-ancestors 'self' is load-bearing, not decoration.** This
+		// document is displayed inside the reader's iframe, and the app sends
+		// X-Frame-Options: DENY on everything. A CSP carrying frame-ancestors
+		// is what overrides that for this one response -- the other rungs have
+		// it and this one did not, so the pane showed a broken-document icon
+		// and nothing else. Found by clicking Src, not by any test.
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'none'; sandbox; frame-ancestors 'self'")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Cache-Control", "no-store, private")
+		w.Write(msg.Raw)
+		return
+	}
+
 	body := renderBody(msg, view, a.prefs(r).Bool("reading.strip_colors"))
 
 	// `data:` covers both a sender's own data: URI and the embedded images
@@ -3319,9 +3941,18 @@ func (a *App) handleMessageBody(w http.ResponseWriter, r *http.Request) {
 // page and the document it frames are two separate requests, and a control that
 // changed only the outer one would show a "+ remote images" button that lit up
 // while the body stayed exactly as it was.
-func bodyURLFor(uid int64, folder string, view BodyView) string {
-	return fmt.Sprintf("/app/message/%d/body?folder=%s&view=%s",
-		uid, urlQueryEscape(folder), urlQueryEscape(string(view)))
+// bodyURLFor is the sandboxed iframe's src.
+//
+// The UID stays, because this names a resource the browser fetches as its own
+// document rather than the app's idea of where anybody is -- and the folder it
+// lives in comes from the state, like everything else.
+//
+// The rung stays too, and has to: it is part of which rendering is being
+// asked for, and without it in the URL the iframe would not reload when the
+// user climbs the ladder. Same document, same address, no fetch.
+func bodyURLFor(uid int64, view BodyView) string {
+	return fmt.Sprintf("/app/message/%d/body?view=%s",
+		uid, urlQueryEscape(string(view)))
 }
 
 // neighbours finds the messages either side of one in the current page, for the
@@ -3368,7 +3999,7 @@ func (a *App) handleMessageSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	uid64 := int64(uid)
-	msg, err := a.fetchMessage(r, d.Account, imapPw, currentFolder(r), uint32(uid64))
+	msg, err := a.fetchMessage(r, d.Account, imapPw, a.viewOf(r).Folder, uint32(uid64))
 	if err != nil {
 		http.Error(w, "could not load the message", http.StatusBadGateway)
 		return
@@ -3409,7 +4040,7 @@ func (a *App) handleMessagePart(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	msg, err := a.fetchMessage(r, d.Account, imapPw, currentFolder(r), uid)
+	msg, err := a.fetchMessage(r, d.Account, imapPw, a.viewOf(r).Folder, uid)
 	if err != nil {
 		http.Error(w, "could not load the message", http.StatusBadGateway)
 		return
@@ -3449,20 +4080,6 @@ func safeDownloadName(name string) string {
 		name = name[:120]
 	}
 	return name
-}
-
-// attachPreset resolves the config file's email_domains entry for an account.
-//
-// A miss is silent and ordinary: an attached mailbox may be on any server the
-// user names, and only a domain this deployment serves has an entry. No entry
-// means no per-server workarounds, which is the common case.
-func (a *App) attachPreset(r *http.Request, acct *MailAccount) {
-	if acct == nil {
-		return
-	}
-	if d, ok := a.cfg.DomainFor(acct.Email); ok {
-		acct.Preset = d
-	}
 }
 
 // maxMessageBytes is the configured attachment/message ceiling.

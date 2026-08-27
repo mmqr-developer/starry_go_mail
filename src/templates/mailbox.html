@@ -107,13 +107,28 @@
      two copies of a button would drift and the way they would drift is that
      the toolbar stops matching the message under it. */}}
 
+{{/* Nothing. The reader's toolbar used to carry the folder, the open
+     message's UID, the message to come back to and the current rung of the
+     body ladder -- four facts about where the user is, re-stated in the markup
+     on every render and posted back with every press. All four now live on the
+     server, so there is nothing here to send.
+
+     The template survives as an empty span because it is one of toolbarPieces:
+     the reader swaps these by id when the open message changes, and an id that
+     stops existing is a swap that silently lands nowhere. */}}
 {{define "tb-state"}}<span id="msg-state"{{if .IsOOB "tb-state"}} hx-swap-oob="true"{{end}}>
-  <input type="hidden" name="folder" value="{{.Folder}}">
-  <input type="hidden" name="uid" value="{{.Reader.Message.UID}}">
-  {{/* Which message to come back to, for the actions that leave it where it
-       is. See handleMessageAction for why only starring uses it. */}}
-  <input type="hidden" name="stay" value="{{.Reader.Message.UID}}">
-  <input type="hidden" name="view" value="{{.Reader.View}}">
+  {{/* WHICH SET these buttons act on -- not which message.
+
+       The reader's buttons mean "this message, the one I am reading". The
+       list's mean "the ones I ticked". Both toolbars post the same verbs to
+       the same endpoints, so without this they resolve identically, and a row
+       ticked in the list quietly hijacks the star in the reader: I pressed it
+       with a message open and it starred a different message.
+
+       A constant, not state. It says something about this toolbar that was
+       true when the template was written and cannot become false -- unlike a
+       message id, which is only true until something moves. */}}
+  <input type="hidden" name="scope" value="open">
 </span>{{end}}
 
 
@@ -126,22 +141,22 @@
   {{with .Reader}}
   {{if .Message.Flagged}}
   <button type="submit" class="btn is-on" title="Remove star" aria-label="Remove the star from this message"
-          formaction="/app/messages/action?action=unflag&amp;folder={{$.Folder | urlquery}}">{{icon "star-on"}}</button>
+          formaction="/app/do/unflag" hx-post="/app/do/unflag">{{icon "star-on"}}</button>
   {{else}}
   <button type="submit" class="btn" title="Star" aria-label="Star this message"
-          formaction="/app/messages/action?action=flag&amp;folder={{$.Folder | urlquery}}">{{icon "star"}}</button>
+          formaction="/app/do/flag" hx-post="/app/do/flag">{{icon "star"}}</button>
   {{end}}
   <button type="submit" class="btn" title="Mark unread" aria-label="Mark this message unread"
-          formaction="/app/messages/action?action=unseen&amp;folder={{$.Folder | urlquery}}">{{icon "envelope"}}</button>
+          formaction="/app/do/unseen" hx-post="/app/do/unseen">{{icon "envelope"}}</button>
   {{end}}
 </div>{{end}}
 
 
 {{define "tb-send"}}<div id="msg-send" class="btn-group"{{if .IsOOB "tb-send"}} hx-swap-oob="true"{{end}}>
   {{with .Reader}}
-  <a hx-boost="true" class="btn" href="/app/compose/reply/{{.Message.UID}}?folder={{$.Folder}}" title="Reply" aria-label="Reply">{{icon "reply"}}</a>
-  <a hx-boost="true" class="btn" href="/app/compose/replyall/{{.Message.UID}}?folder={{$.Folder}}" title="Reply to all" aria-label="Reply to all">{{icon "replyall"}}</a>
-  <a hx-boost="true" class="btn" href="/app/compose/forward/{{.Message.UID}}?folder={{$.Folder}}" title="Forward" aria-label="Forward">{{icon "forward"}}</a>
+  <a hx-boost="true" class="btn" href="/app/compose/reply/{{.Message.UID}}" title="Reply" aria-label="Reply">{{icon "reply"}}</a>
+  <a hx-boost="true" class="btn" href="/app/compose/replyall/{{.Message.UID}}" title="Reply to all" aria-label="Reply to all">{{icon "replyall"}}</a>
+  <a hx-boost="true" class="btn" href="/app/compose/forward/{{.Message.UID}}" title="Forward" aria-label="Forward">{{icon "forward"}}</a>
   {{end}}
 </div>{{end}}
 
@@ -160,7 +175,7 @@
                  stay on. */}}
             {{if special $.Folders "junk"}}
             <li class="drop-sep"><button type="submit" class="drop-item"
-                    formaction="/app/messages/action?action=spam-seen&amp;folder={{$.Folder | urlquery}}">
+                    formaction="/app/do/spam-seen" hx-post="/app/do/spam-seen">
               <span class="drop-icon" aria-hidden="true">{{icon "warning"}}</span>Mark as read and spam</button></li>
             {{end}}
             <li class="drop-sep">{{template "tb-source" $}}</li>
@@ -175,16 +190,23 @@
   {{with .Reader}}
       {{/* Previous and next within this page of the list. Absent rather than
            disabled at either end -- see neighbours() for why the page is the
-           boundary. */}}
-        {{if .Prev}}
-        <a hx-boost="true" class="btn" title="Newer message" aria-label="Newer message"
-           href="/app/message/{{.Prev}}?folder={{$.Folder}}&amp;view={{$.Reader.View}}">{{icon "prev"}}</a>
+           boundary.
+
+           **These carry no message id, and that is the point.** They post the
+           word "next" or "prev"; the server takes the message it knows is
+           open and steps within the list it is about to draw anyway. A UID
+           here would be a fact frozen in when the page was rendered, and would
+           go on being sent after anything moved that message -- so the button
+           would act on the wrong one rather than failing. */}}
+        {{if .HasPrev}}
+        <button type="submit" class="btn" title="Newer message" aria-label="Newer message"
+                formaction="/app/reader/prev" hx-post="/app/reader/prev">{{icon "prev"}}</button>
         {{else}}
         <span class="btn is-disabled" aria-hidden="true">{{icon "prev"}}</span>
         {{end}}
-        {{if .Next}}
-        <a hx-boost="true" class="btn" title="Older message" aria-label="Older message"
-           href="/app/message/{{.Next}}?folder={{$.Folder}}&amp;view={{$.Reader.View}}">{{icon "next"}}</a>
+        {{if .HasNext}}
+        <button type="submit" class="btn" title="Older message" aria-label="Older message"
+                formaction="/app/reader/next" hx-post="/app/reader/next">{{icon "next"}}</button>
         {{else}}
         <span class="btn is-disabled" aria-hidden="true">{{icon "next"}}</span>
         {{end}}
@@ -204,6 +226,14 @@
           {{longDate .Message.Date}}<br>
           To: {{if .Message.To}}{{.Message.To}}{{else}}(undisclosed){{end}}
           {{if .Message.Cc}}<br>Cc: {{.Message.Cc}}{{end}}
+          {{/* The envelope, when this mailbox has asked for it. These are what
+               the mail servers used rather than what the sender wrote, and
+               either can be absent on its own -- Return-Path is added by the
+               delivering server, Delivered-To by some of them. Shown in a
+               class of their own so they read as machine detail rather than
+               as more of the message's own addressing. */}}
+          {{if .EnvelopeFrom}}<br><span class="view-envelope">Envelope From: {{.EnvelopeFrom}}</span>{{end}}
+          {{if .EnvelopeTo}}<br><span class="view-envelope">Envelope To: {{.EnvelopeTo}}</span>{{end}}
         </div>
       </div>
 
@@ -213,7 +243,22 @@
            buttons: each one is a different rendering of the same message at a
            URL of its own, so it is shareable, bookmarkable and works with the
            back button. */}}
-      <div class="view-modes" role="group" aria-label="How to show this message">
+      {{/* ONE form around the whole control, with the rung as each button's
+           own name/value rather than a hidden field per rung. A submit button
+           contributes exactly one name/value pair and one is all this needs,
+           so the rungs stay siblings of each other -- a form apiece would make
+           every button the only child of its own parent, and the segmented
+           look is built out of which rung is first and which is last.
+
+           Aimed at the reading pane rather than the page: which rung a message
+           is shown at changes nothing about the folder list or the message
+           list, and swapping those too repaints the window and costs two IMAP
+           round trips. The server reads the target from the HX-Target header
+           and renders the pane alone; with scripting off the form submits
+           normally and the whole page comes back. */}}
+      <form method="POST" action="/app/reader/view"
+            class="view-modes" role="group" aria-label="How to show this message"
+            hx-post="/app/reader/view" hx-target="#msg-content" hx-swap="outerHTML">
         <span class="view-modes-label" aria-hidden="true">Show as</span>
         {{$r := .}}
         {{range bodyViews}}
@@ -221,16 +266,8 @@
             {{if eq .View $r.View}}
             <span class="seg is-on" aria-current="true">{{.Label}}</span>
             {{else}}
-            {{/* Aimed at the reading pane rather than the page: which rung
-                 of the ladder a message is shown at changes nothing about the
-                 folder list or the message list, and swapping those too
-                 repaints the window and costs two IMAP round trips. The
-                 server reads the target from the HX-Target header and renders
-                 the pane alone; the href is unchanged, so this is still an
-                 ordinary page load with scripting off. */}}
-            <a hx-boost="true" hx-target="#msg-content" hx-swap="outerHTML"
-               class="seg" title="{{.Title}}"
-               href="/app/message/{{$r.Message.UID}}?folder={{$.Folder}}&amp;view={{.View}}">{{.Label}}</a>
+            <button type="submit" class="seg" title="{{.Title}}"
+                    name="view" value="{{.View}}">{{.Label}}</button>
             {{end}}
           {{end}}
         {{end}}
@@ -251,7 +288,9 @@
              Beside the buttons rather than in a notice-bar of its own: it is
              about the control, not about the message, and the bars below are
              reserved for things that were withheld. */}}
-        {{if and (not $r.View.IsHTML) $r.Body.HasHTML}}
+        {{/* Not at the raw rung: a note about the HTML version belongs beside
+             a rendering of the message, not beside its bytes. */}}
+        {{if and (not $r.View.IsHTML) (not $r.View.IsSource) $r.Body.HasHTML}}
         <span class="view-modes-note">
           {{if $r.Body.TextFromHTML}}
             {{icon "warning"}} HTML email rendered as text.
@@ -260,7 +299,7 @@
           {{end}}
         </span>
         {{end}}
-      </div>
+      </form>
 
       {{/* What the PGP wrapper turned out to mean. Above the body rather than
            below it, because it is the thing that decides how to read what
@@ -283,16 +322,22 @@
       <div class="notice-bar">
         <span><strong>{{.Body.BlockedRemote}}</strong> remote image{{if ne .Body.BlockedRemote 1}}s were{{else}} was{{end}} not fetched.</span>
         <span class="notice-aside">Fetching them tells the sender you opened this message, and roughly where from.</span>
-        <a hx-boost="true" hx-target="#msg-content" hx-swap="outerHTML"
-           class="btn" href="/app/message/{{.Message.UID}}?folder={{$.Folder}}&amp;view=html-remote">Fetch them anyway</a>
+        <form method="POST" action="/app/reader/view"
+              hx-post="/app/reader/view" hx-target="#msg-content" hx-swap="outerHTML">
+          <input type="hidden" name="view" value="html-remote">
+          <button type="submit" class="btn">Fetch them anyway</button>
+        </form>
       </div>
       {{end}}
       {{if gt .Body.BlockedInline 0}}
       <div class="notice-bar notice-quiet">
         <span><strong>{{.Body.BlockedInline}}</strong> image{{if ne .Body.BlockedInline 1}}s{{end}} sent with this message {{if ne .Body.BlockedInline 1}}are{{else}}is{{end}} not shown.</span>
         <span class="notice-aside">These came with the message. Showing them fetches nothing.</span>
-        <a hx-boost="true" hx-target="#msg-content" hx-swap="outerHTML"
-           class="btn" href="/app/message/{{.Message.UID}}?folder={{$.Folder}}&amp;view=html-inline">Show them</a>
+        <form method="POST" action="/app/reader/view"
+              hx-post="/app/reader/view" hx-target="#msg-content" hx-swap="outerHTML">
+          <input type="hidden" name="view" value="html-inline">
+          <button type="submit" class="btn">Show them</button>
+        </form>
       </div>
       {{end}}
 
@@ -313,7 +358,7 @@
         {{range .Message.Attachments}}
           {{if not .IsEmbedded}}
           <a class="attachment" download
-             href="/app/message/{{$r.Message.UID}}/part/{{.Index}}?folder={{$.Folder}}">
+             href="/app/message/{{$r.Message.UID}}/part/{{.Index}}">
             <span aria-hidden="true">📎</span>
             {{.Filename}} <span class="attachment-size">{{humanSize .Size}}</span>
           </a>
@@ -328,19 +373,21 @@
 
 
 {{/* The three entries in the More menu that name this message. Print and
-     "mark as read and spam" act on whatever the form is carrying, so they are
-     the same for every message and stay where they are; these three carry the
-     uid in a URL and are swapped on their own. */}}
+     "mark as read and spam" act on whatever the state says is open, so they
+     are the same for every message and stay where they are; these three name
+     a resource the browser fetches as its own document -- so they carry the
+     uid, and are swapped on their own when the open message changes. The
+     folder they are in comes from the state, like everywhere else. */}}
 {{define "tb-open"}}<a id="msg-open" class="drop-item" target="_blank" rel="noopener noreferrer"
    href="{{.Reader.BodyURL}}"{{if .IsOOB "tb-open"}} hx-swap-oob="true"{{end}}>
   <span class="drop-icon" aria-hidden="true">{{icon "external"}}</span>Open in a new window</a>{{end}}
 
 {{define "tb-source"}}<a id="msg-source" class="drop-item" target="_blank" rel="noopener noreferrer"
-   href="/app/message/{{.Reader.Message.UID}}/source?folder={{.Folder}}"{{if .IsOOB "tb-source"}} hx-swap-oob="true"{{end}}>
+   href="/app/message/{{.Reader.Message.UID}}/source"{{if .IsOOB "tb-source"}} hx-swap-oob="true"{{end}}>
   <span class="drop-icon" aria-hidden="true">{{icon "code"}}</span>View the original message</a>{{end}}
 
 {{define "tb-download"}}<a id="msg-download" class="drop-item"
-   href="/app/message/{{.Reader.Message.UID}}/source?folder={{.Folder}}&amp;download=1"{{if .IsOOB "tb-download"}} hx-swap-oob="true"{{end}}>
+   href="/app/message/{{.Reader.Message.UID}}/source?download=1"{{if .IsOOB "tb-download"}} hx-swap-oob="true"{{end}}>
   <span class="drop-icon" aria-hidden="true">{{icon "download"}}</span>Download the original message</a>{{end}}
 
 
@@ -355,32 +402,44 @@
      Every button in it acts on the open message, so they share one form
      carrying its UID. The verb rides in each button's own formaction -- see
      the note in the list template. */}}
-{{define "reader-toolbar"}}<form id="msg-toolbar" method="POST" action="/app/messages/action"
+{{/* Every button in it acts on the open message, and none of them names it.
+     **hx-post beside every formaction.** A submit button's formaction is the
+     no-script path: the browser posts to it and the whole page comes back. It
+     is NOT something htmx reads -- a boosted form uses the FORM's action and
+     ignores the button's -- so without an hx-post here the browser navigates
+     for real and the address bar ends up at a POST-only URL, which then 405s
+     on reload. The two say the same thing on the same line for the two
+     mechanisms. hx-target and hx-swap are on the form, inherited by all of
+     them, and name the whole view for the same reason hx-boost does.
+*/}}
+{{define "reader-toolbar"}}<form id="msg-toolbar" method="POST" action="/app/do/seen"
+      hx-target="#app-body" hx-swap="outerHTML"
       class="btn-toolbar view-toolbar"{{if .IsOOB "reader-toolbar"}} hx-swap-oob="true"{{end}}>
   {{if .Reader}}
 
       {{template "tb-state" $}}
 
       <div class="btn-group">
-        <a hx-boost="true" class="btn" href="/app/mailbox?folder={{$.Folder}}" title="Close" aria-label="Close this message">{{icon "close"}}</a>
+        <button type="submit" class="btn" formaction="/app/reader/close" hx-post="/app/reader/close"
+                title="Close" aria-label="Close this message">{{icon "close"}}</button>
       </div>
 
       <div class="btn-group">
         {{if special $.Folders "archive"}}
         <button type="submit" class="btn" title="Archive" aria-label="Archive this message"
-                formaction="/app/messages/action?action=archive&amp;folder={{$.Folder | urlquery}}">{{icon "archive"}}</button>
+                formaction="/app/do/archive" hx-post="/app/do/archive">{{icon "archive"}}</button>
         {{end}}
         {{if special $.Folders "junk"}}
           {{if eq $.Folder (special $.Folders "junk")}}
           <button type="submit" class="btn" title="Not spam" aria-label="Move this message back to the inbox"
-                  formaction="/app/messages/action?action=notspam&amp;folder={{$.Folder | urlquery}}">{{icon "check"}}</button>
+                  formaction="/app/do/notspam" hx-post="/app/do/notspam">{{icon "check"}}</button>
           {{else}}
           <button type="submit" class="btn" title="Spam" aria-label="Move this message to Junk"
-                  formaction="/app/messages/action?action=spam&amp;folder={{$.Folder | urlquery}}">{{icon "warning"}}</button>
+                  formaction="/app/do/spam" hx-post="/app/do/spam">{{icon "warning"}}</button>
           {{end}}
         {{end}}
         <button type="submit" class="btn" title="Delete" aria-label="Delete this message"
-                formaction="/app/messages/action?action=delete&amp;folder={{$.Folder | urlquery}}">{{icon "trash"}}</button>
+                formaction="/app/do/delete" hx-post="/app/do/delete">{{icon "trash"}}</button>
       </div>
 
       {{/* tb-optional: hidden below 1350px, where the toolbar cannot fit on

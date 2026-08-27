@@ -1,6 +1,6 @@
 # starry_go_mail. See Docker.How.To.
 #
-#   PEPPER="$(cat pepper.txt)" docker compose build
+#   docker compose build
 #   docker compose up -d
 #
 # No `version:` key -- Compose v2 ignores it and warns.
@@ -9,11 +9,11 @@ services:
   starry_go_mail:
     build:
       context: .
-      args:
-        # Empty unless PEPPER is exported. A pepper that disagrees with the one
-        # that wrote the data makes every stored mail password and TOTP secret
-        # undecryptable. Do not put it in a .env file that gets committed.
-        PEPPER: "${PEPPER:-}"
+      # No build args. The pepper is NOT compiled in any more -- see the
+      # Dockerfile, and the secrets: block at the bottom of this file for how
+      # to supply one at runtime instead. An image with no pepper baked in is
+      # one that can be published and upgraded without destroying anybody's
+      # stored passwords.
     image: starry_go_mail
 
     # The container is named outright, so it is starry_go_mail in `docker ps`
@@ -63,6 +63,12 @@ services:
       # see volumes: and config: down below
       - config:/config
 
+    # Uncomment together with the secrets: block at the bottom of this file.
+    # Both halves are needed: this attaches the secret to the container, that
+    # one says where it comes from on the host.
+    #secrets:
+    #  - mail_client_pepper
+
     tmpfs:
       # Uploads over 8MB spill out of memory into os.TempDir(), and a scratch
       # image has no /tmp -- attaching a large file would fail with a temp-file
@@ -73,6 +79,15 @@ services:
       # Zone data is in the image, so timestamps can render as something other
       # than UTC.
       TZ: UTC
+      # The pepper is read from /run/secrets/mail_client_pepper automatically
+      # when a secret of that name is attached, so nothing is needed here. To
+      # keep it somewhere else, name the file:
+      #
+      #   MAIL_CLIENT_PEPPER_FILE: /run/secrets/pepper
+      #
+      # MAIL_CLIENT_PEPPER exists too and takes the value directly, but it is
+      # visible in `docker inspect` and in the process environment -- prefer
+      # the file.
 
     # Everything written goes to the volume or the tmpfs above.
     read_only: true
@@ -131,3 +146,37 @@ volumes:
   #   - ./config:/config          relative to this file
   #   - /srv/mailclient:/config   absolute
   config:
+
+# The pepper, supplied at runtime rather than compiled into the image.
+#
+# **What it buys.** secret_key lives in /config/mail_client.json, in the same
+# volume as the database it protects, so a copy of that volume is a copy of
+# every stored mail password. The pepper is mixed into the same key and is kept
+# somewhere else -- so a stolen volume is no longer enough on its own. That is
+# the entire point, and it is why the file must live OUTSIDE the config volume.
+#
+# **Optional.** Leave all of this commented and the app runs with secret_key
+# alone, which is what it has always done and is still a per-install random key.
+#
+# To turn it on, on a deployment with no accounts yet:
+#
+#   mkdir -p /etc/starry
+#   (umask 077; openssl rand -base64 48 > /etc/starry/pepper)
+#   # then uncomment this block and the secrets: line up in the service
+#   docker compose up -d
+#
+# **BACK THE FILE UP, off this machine, before you create an account.** It is
+# not regenerable and not derivable: lose it and every stored mail password and
+# TOTP secret goes with it, exactly like losing secret_key.
+#
+# **Adding one to a deployment that already has accounts destroys them.** The
+# key is derived from both values, so introducing a pepper re-derives it and
+# nothing can read the old rows back. The server checks this at startup and
+# refuses to come up rather than corrupting anything -- take the pepper back out
+# and it starts again, unharmed.
+#
+#secrets:
+#  mail_client_pepper:
+#    # Absolute path on the host. Compose mounts it read-only at
+#    # /run/secrets/mail_client_pepper, which is where the app looks by default.
+#    file: /etc/starry/pepper

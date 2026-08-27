@@ -188,6 +188,22 @@ type BrandVM struct {
 type MailboxVM struct {
 	Page   *MessagePage
 	Folder string
+
+	// Selected is the ticked rows, so each checkbox can be drawn from the
+	// server's record rather than from whatever the browser happens to be
+	// holding. That is what makes a tick survive a re-render of the list, and
+	// what makes a lost request correct itself on the next one.
+	Selected map[uint32]bool
+
+	// Notice is a line shown under the list's toolbar, for the case where a
+	// button did nothing and the reason is not an error.
+	//
+	// It exists because "no messages were selected" used to be indentical to
+	// success: handleMessageAction treats an empty selection as a no-op, every
+	// Pool method returns nil for an empty UID set, and the list was then
+	// redrawn exactly as it was. A button that silently redraws the page is a
+	// button that is broken, as far as anyone using it can tell.
+	Notice string
 }
 
 // ReaderVM is the right pane.
@@ -199,10 +215,35 @@ type ReaderVM struct {
 	// control can mark the current one. See viewmode.go.
 	View BodyView
 
-	// Prev and Next are the neighbouring messages within the current page,
-	// zero where there is none. See neighbours().
-	Prev uint32
-	Next uint32
+	// HasPrev and HasNext say whether there is a neighbour within the current
+	// page, so the two buttons can be drawn as live or dead. See neighbours().
+	//
+	// **Booleans, deliberately, and not the UIDs.** The buttons post "next"
+	// and "prev"; the server works out what that means from the message it
+	// knows is open and the list it has just read. A UID here would be a fact
+	// captured at render time -- true when the page was drawn, and wrong the
+	// moment anything moves that message -- and having it in the view model at
+	// all is what makes putting it in the markup a one-line mistake. It is not
+	// available to make.
+	HasPrev bool
+	HasNext bool
+	// EnvelopeFrom and EnvelopeTo are Return-Path and Delivered-To: the
+	// addresses the mail SERVERS used, rather than the ones the sender wrote
+	// in the message.
+	//
+	// Read from the raw message rather than the IMAP envelope, because they
+	// are not in it -- ENVELOPE carries what the author wrote and stops there.
+	// Both are empty unless reading.show_envelope is on, and either can be
+	// empty on its own: Return-Path is added by the delivering server and
+	// Delivered-To by some but not all of them.
+	//
+	// **Why anybody wants them.** They are the two headers a forgery cannot
+	// choose. A message whose From says one thing and whose Return-Path says
+	// another is the ordinary shape of a spoof, and it is invisible until
+	// these are on screen.
+	EnvelopeFrom string
+	EnvelopeTo   string
+
 	// BodyURL is the sandboxed iframe's src -- a separate endpoint serving the
 	// sanitised message as its own document.
 	//
@@ -886,6 +927,22 @@ var sortOptions = []sortOption{
 	{SortSubjectDesc, "Subject, Z–A", "¶"},
 	{SortSizeDesc, "Largest first", "⬛"},
 	{SortSizeAsc, "Smallest first", "▫"},
+}
+
+// sortOptionNamed turns a posted order into one of the nine, or "" if it is
+// not one of them.
+//
+// The name of an order is what the user clicked, so it travels in the request
+// -- but it is still input, and an unrecognised value must leave the state
+// alone rather than becoming a sort key IMAP will refuse on every later page.
+func sortOptionNamed(key string) string {
+	key = strings.TrimSpace(key)
+	for _, o := range sortOptions {
+		if o.Key == key {
+			return key
+		}
+	}
+	return ""
 }
 
 // icon renders one of them. An unknown name returns nothing rather than

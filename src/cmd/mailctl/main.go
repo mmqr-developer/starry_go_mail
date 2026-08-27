@@ -44,7 +44,7 @@ import (
 // expectedSchema is the migration the server is at. Bumping the server's
 // migrations means bumping this, deliberately: the check is what stops a tool
 // built against one schema writing into another.
-const expectedSchema = 13
+const expectedSchema = 14
 
 // The current directory, not /config.
 //
@@ -253,11 +253,17 @@ func openSealer(db *sql.DB) (*secret.Sealer, error) {
 		return nil, fmt.Errorf("secret_key in %s is unusable: %w", confPath(), err)
 	}
 
-	// Any value the server sealed will do. A mail password is the most likely
-	// to exist; a TOTP secret is the fallback.
+	// Any value the server sealed will do. The key_check probe first: the
+	// server writes it on its first start, so it is there even on a deployment
+	// with no accounts yet -- which is exactly when this tool is used most, to
+	// create the first one. A mail password and a TOTP secret remain as
+	// fallbacks for a database from before that row existed.
 	var sample string
-	_ = db.QueryRow(`SELECT imap_password FROM mail_accounts
-	                 WHERE imap_password <> '' LIMIT 1`).Scan(&sample)
+	_ = db.QueryRow(`SELECT probe FROM key_check WHERE id = 1`).Scan(&sample)
+	if sample == "" {
+		_ = db.QueryRow(`SELECT imap_password FROM mail_accounts
+		                 WHERE imap_password <> '' LIMIT 1`).Scan(&sample)
+	}
 	if sample == "" {
 		_ = db.QueryRow(`SELECT totp_secret FROM app_users
 		                 WHERE totp_secret <> '' LIMIT 1`).Scan(&sample)
@@ -266,8 +272,8 @@ func openSealer(db *sql.DB) (*secret.Sealer, error) {
 		return nil, fmt.Errorf(
 			"this mailctl cannot decrypt what the server wrote: %w\n"+
 				"  Check that -config points at the server's own mail_client.json, "+
-				"and that mailctl was built from the same source with the same "+
-				"compiled-in pepper (mailctl info reports whether it has one)", err)
+				"and that this mailctl sees the same pepper as the server "+
+				"(mailctl info reports where it is reading one from)", err)
 	}
 	return s, nil
 }
@@ -937,9 +943,9 @@ func cmdInfo() error {
 	// asked, which is always "which files are you actually looking at".
 	fmt.Printf("config     %s\n", displayPath(confPath()))
 	fmt.Printf("database   %s\n", displayPath(dbPath()))
-	fmt.Printf("pepper     %s\n", map[bool]string{
-		true:  "compiled in",
-		false: "none (config key only)"}[secret.HasPepper()])
+	// The source, never the value -- and the source is the whole answer to
+	// "why can this tool not read the database", which is what info is for.
+	fmt.Printf("pepper     %s\n", secret.PepperSource())
 
 	db, err := openDB()
 	if err != nil {

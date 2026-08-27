@@ -32,24 +32,25 @@ import (
 // will not start.
 const KeyLen = 32
 
-// BuildPepper is a secret compiled into the binary with
+// BuildPepper is a pepper compiled into the binary with
 // -ldflags "-X ...secret.BuildPepper=<hex>".
 //
-// **Why this exists.** The encryption key otherwise lives in
-// /config/mail_client.json, which sits in the same directory — and the same
-// Docker volume — as the database it protects. One stolen volume then gives up
-// every stored mail password. Mixing in a value that exists only inside the
-// binary means an attacker needs the volume *and* the image.
+// **This is now the last fallback, not the recommended source.** See pepper.go:
+// the runtime sources are checked first, and a distributed image must ship
+// without this set, because a pepper that travels inside a public image is
+// readable by everyone who pulls it and is therefore not a secret at all.
 //
-// **What it is not.** It is not a replacement for the config key, and it is not
-// secret from anyone holding the binary: `strings` will find it. It raises the
-// cost of a stolen backup, which is the realistic threat, and nothing more.
+// It stays because every install built by ./build.sh has one, and dropping it
+// would make their stored passwords unreadable. LoadPepper falls through to it
+// whenever no runtime source is present, so those installs keep working with no
+// action at all.
 //
-// **The trap.** Change this value and every stored mail password and TOTP
-// secret becomes undecryptable — there is no migration path, because the old
-// key is gone. Generate it once, keep it (build.sh reads pepper.txt), and treat
-// it like the config key. An empty pepper is fully supported and means "config
-// key only", which is what an existing install already has.
+// **The trap, unchanged.** Change the pepper in effect -- from any source --
+// and every stored mail password and TOTP secret becomes undecryptable. There
+// is no migration path, because the old key is gone. That is what keycheck.go
+// on the server, and openSealer in mailctl, exist to catch at startup rather
+// than at somebody's next sign-in. An empty pepper is fully supported and means
+// "config key only".
 var BuildPepper string
 
 var errNoKey = errors.New(
@@ -70,8 +71,8 @@ var errNoKey = errors.New(
 // (key, nonce) pair is catastrophic rather than gradual.
 type Sealer struct{ aead cipher.AEAD }
 
-// NewSealer derives the working key from the configured key and the compiled-in
-// pepper.
+// NewSealer derives the working key from the configured key and the pepper in
+// effect (see LoadPepper).
 //
 // HKDF rather than concatenating or XOR-ing the two: it mixes both inputs over
 // the whole output, so neither half can be recovered from the result and a weak
@@ -82,9 +83,13 @@ func NewSealer(hexKey string) (*Sealer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if BuildPepper != "" {
+	pepper, _, err := LoadPepper()
+	if err != nil {
+		return nil, err
+	}
+	if pepper != "" {
 		derived := make([]byte, KeyLen)
-		r := hkdf.New(sha256.New, key, []byte(BuildPepper),
+		r := hkdf.New(sha256.New, key, []byte(pepper),
 			[]byte("mail_client account secret v1"))
 		if _, err := io.ReadFull(r, derived); err != nil {
 			return nil, err
@@ -124,11 +129,15 @@ func NewUserSealer(hexKey, passwordHash string) (*Sealer, error) {
 	if err != nil {
 		return nil, err
 	}
+	pepper, _, err := LoadPepper()
+	if err != nil {
+		return nil, err
+	}
 	// Same shape as NewSealer -- pepper as the salt, a constant as the info --
 	// with the hash appended to the info string. The NUL separates the two so
 	// no pair of (constant, hash) values can be read as a different pair.
 	derived := make([]byte, KeyLen)
-	r := hkdf.New(sha256.New, key, []byte(BuildPepper),
+	r := hkdf.New(sha256.New, key, []byte(pepper),
 		append([]byte("mail_client imap password v1\x00"), passwordHash...))
 	if _, err := io.ReadFull(r, derived); err != nil {
 		return nil, err
@@ -232,9 +241,6 @@ func (s *Sealer) SelfTest(knownCiphertext string) error {
 	_, err := s.Open(knownCiphertext)
 	return err
 }
-
-// HasPepper reports whether this binary carries one, for diagnostics.
-func HasPepper() bool { return BuildPepper != "" }
 
 // RandomHex is used for generated keys.
 func RandomHex(n int) (string, error) {

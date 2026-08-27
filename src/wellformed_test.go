@@ -82,12 +82,41 @@ func checkBalance(html string) string {
 	return ""
 }
 
-func TestRenderedViewsAreWellFormed(t *testing.T) {
+// wellFormedViews are every view, and every region that can be sent on its
+// own -- a region is swapped into a live document, so a problem in one is
+// resolved by the browser against whatever happens to surround it.
+var wellFormedViews = []string{
+	"mailbox", "reader", "compose", "login", "error", "signout",
+	"sidebar", "list", "reader-pane", "mailbox-pane", "reader-toolbar",
+	"reader-content", "switcher", "compose-bar", "folder-list",
+	"sidebar-tools", "list-bar", "list-search-bar", "message-list",
+	"tb-state", "tb-flag", "tb-send", "tb-more", "tb-nav",
+	"tb-open", "tb-source", "tb-download", "list-row", "oob-row",
+}
+
+// renderedViews draws all of them once, so more than one check can be run
+// over the same markup.
+func renderedViews(t *testing.T) map[string]string {
+	t.Helper()
 	tmpl, err := parseTemplates()
 	if err != nil {
 		t.Fatal(err)
 	}
-	page := func() *PageData {
+	out := make(map[string]string, len(wellFormedViews))
+	for _, name := range wellFormedViews {
+		d := wellFormedPage()
+		d.Row = d.Mailbox.Page.Messages[0]
+		var b strings.Builder
+		if err := tmpl.ExecuteTemplate(&b, name, d); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		out[name] = b.String()
+	}
+	return out
+}
+
+func wellFormedPage() *PageData {
+	return func() *PageData {
 		return &PageData{
 			View: "mailbox", Title: "Mail", Folder: "INBOX", FoldersLoaded: true,
 			Brand:   BrandVM{Title: "Mail"},
@@ -96,33 +125,18 @@ func TestRenderedViewsAreWellFormed(t *testing.T) {
 				Messages: []*MessageSummary{{UID: 21, Subject: "a", From: "sam@example.com"}}}},
 			Reader: &ReaderVM{Message: &Message{UID: 21, Subject: "a", From: "sam@example.com",
 				Attachments: []*Attachment{{Index: 1, Filename: "x.pdf", Size: 10}}},
-				View: ViewPlain, BodyURL: "/app/message/21/body", Prev: 20, Next: 22},
+				View: ViewPlain, BodyURL: "/app/message/21/body", HasPrev: true, HasNext: true},
 			Compose: &ComposeVM{Draft: &Draft{}},
 			Auth:    &AuthVM{},
 		}
-	}
-	// Every view, and every region that can be sent on its own -- a region is
-	// swapped into a live document, so an imbalance in one is repaired by the
-	// browser against whatever happens to surround it.
-	for _, name := range []string{
-		"mailbox", "reader", "compose", "login", "error", "signout",
-		"sidebar", "list", "reader-pane", "mailbox-pane", "reader-toolbar",
-		"reader-content", "switcher", "compose-bar", "folder-list",
-		"sidebar-tools", "list-bar", "list-search-bar", "message-list",
-		"tb-state", "tb-flag", "tb-send", "tb-more", "tb-nav",
-		"tb-open", "tb-source", "tb-download", "list-row", "oob-row",
-	} {
-		t.Run(name, func(t *testing.T) {
-			d := page()
-			d.Row = d.Mailbox.Page.Messages[0]
-			var b strings.Builder
-			if err := tmpl.ExecuteTemplate(&b, name, d); err != nil {
-				t.Fatal(err)
-			}
-			if problem := checkBalance(b.String()); problem != "" {
-				t.Errorf("%s is not well formed:\n  %s", name, problem)
-			}
-		})
+	}()
+}
+
+func TestRenderedViewsAreWellFormed(t *testing.T) {
+	for name, html := range renderedViews(t) {
+		if problem := checkBalance(html); problem != "" {
+			t.Errorf("%s is not well formed:\n  %s", name, problem)
+		}
 	}
 }
 
@@ -133,6 +147,42 @@ func TestRenderedViewsAreWellFormed(t *testing.T) {
 // them and the attribute simply never runs -- an hx-on that does not fire and
 // an hx-vals that sends nothing, both silent. Two of these shipped before the
 // CSP was read properly; this is here so a third does not.
+// A <form> inside a <form> is balanced and still broken.
+//
+// The parser above cannot see it: the tags match, the nesting is consistent,
+// and every id is where the template put it. The BROWSER is what breaks it --
+// HTML forbids nested forms, so it silently drops the inner one, and every
+// control inside it stops belonging to any form at all. The row checkboxes
+// went missing from the list's form exactly this way while the markup looked
+// perfect.
+//
+// The way round it is already in this codebase twice: an empty form elsewhere
+// on the page and a form="..." attribute on the control, which is how the
+// search box and the message rows both reach a form they cannot be inside.
+func TestNoFormIsNestedInsideAnother(t *testing.T) {
+	for name, html := range renderedViews(t) {
+		depth, worst := 0, 0
+		for _, m := range tagRe.FindAllStringSubmatchIndex(html, -1) {
+			if strings.ToLower(html[m[4]:m[5]]) != "form" {
+				continue
+			}
+			if html[m[2]:m[3]] == "/" {
+				depth--
+				continue
+			}
+			depth++
+			if depth > worst {
+				worst = depth
+			}
+		}
+		if worst > 1 {
+			t.Errorf("%s nests a <form> inside another. The browser drops the "+
+				"inner one and every control in it stops belonging to a form; "+
+				"use an empty form elsewhere plus form=\"...\" on the control.", name)
+		}
+	}
+}
+
 func TestNoTemplateDependsOnEval(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("templates", "*.html"))
 	if err != nil || len(files) == 0 {
@@ -183,5 +233,72 @@ func TestTheContentSecurityPolicyForbidsEval(t *testing.T) {
 	}
 	if strings.Contains(s, "unsafe-eval") {
 		t.Error("the CSP now allows eval, which is a decision, not a fix")
+	}
+}
+
+// A button that names its own endpoint must name it to htmx as well.
+//
+// **The failure is invisible in a screenshot and obvious in the address bar.**
+// formaction is the no-script path: the browser posts to it and the whole page
+// comes back, which works. It is not something htmx reads -- a boosted form
+// uses the FORM's action and ignores the button's -- so a button with only a
+// formaction makes the browser navigate for real, and the address bar ends up
+// at a POST-only URL. Reload that and the app answers 405.
+//
+// Every one of these shipped that way and was found by clicking Next and
+// looking at the address bar, so the rule is written down here instead.
+// redirectingEndpoints answer a POST with a redirect to a real GET, so a
+// browser that navigates to them cannot be stranded on a POST-only URL. They
+// are the one shape that does not need an hx-post beside the formaction.
+//
+// Listed explicitly rather than pattern-matched: the property being relied on
+// is what the HANDLER does, which a template cannot see, so it has to be
+// written down and kept true by whoever changes the handler.
+var redirectingEndpoints = map[string]string{
+	"/app/compose/draft": "handleDraftSave redirects to /app/?saved=1; the " +
+		"autosave path is a fetch in app.js and does not use this button",
+}
+
+func TestEveryFormactionAlsoTellsHtmx(t *testing.T) {
+	for name, html := range renderedViews(t) {
+		for _, m := range regexp.MustCompile(
+			`<(?:button|input)[^>]*>`).FindAllString(html, -1) {
+			fa := regexp.MustCompile(`formaction="([^"]+)"`).FindStringSubmatch(m)
+			if fa == nil {
+				continue
+			}
+			if _, ok := redirectingEndpoints[fa[1]]; ok {
+				continue
+			}
+			hp := regexp.MustCompile(`hx-post="([^"]+)"`).FindStringSubmatch(m)
+			if hp == nil {
+				t.Errorf("%s: a button posts to %s with formaction and no "+
+					"hx-post, so htmx lets the browser navigate and the URL "+
+					"ends up on a POST-only route:\n  %s", name, fa[1], m)
+				continue
+			}
+			if hp[1] != fa[1] {
+				t.Errorf("%s: formaction=%q but hx-post=%q -- the two paths "+
+					"through this button do different things", name, fa[1], hp[1])
+			}
+		}
+	}
+}
+
+// And the forms those buttons live in have to say where the answer goes, or
+// htmx swaps a whole view into whatever it happened to be triggered from.
+func TestFormsThatPostSayWhereTheAnswerGoes(t *testing.T) {
+	for name, html := range renderedViews(t) {
+		for _, m := range regexp.MustCompile(`<form[^>]*>`).FindAllString(html, -1) {
+			if !strings.Contains(m, `method="POST"`) {
+				continue
+			}
+			// A form whose controls each carry their own hx-post and target
+			// needs nothing here; what must not happen is an hx-post on the
+			// form with no target for the answer.
+			if strings.Contains(m, "hx-post=") && !strings.Contains(m, "hx-target=") {
+				t.Errorf("%s: a form posts with htmx but names no target:\n  %s", name, m)
+			}
+		}
 	}
 }

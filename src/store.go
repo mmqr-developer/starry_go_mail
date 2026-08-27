@@ -117,6 +117,13 @@ type MailAccount struct {
 	// it, which is precisely backwards for a field whose whole job is to work
 	// around a server's behaviour. That is doubly true now the source is a
 	// file: editing it and restarting must be the whole of the fix.
+	//
+	// **Set here and nowhere else.** mailContext used to attach it a second
+	// time on every request, which was not just redundant: a direct session's
+	// account is a single struct shared for the life of the session, and a
+	// background contact scrape reads Preset through hasCap while it runs. Two
+	// requests overlapping one scrape is a data race on this field, and -race
+	// says so.
 	Preset *EmailDomain
 }
 

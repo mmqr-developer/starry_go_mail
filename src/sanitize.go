@@ -318,6 +318,19 @@ type SanitizedBody struct {
 func renderBody(msg *Message, view BodyView, stripColors bool) SanitizedBody {
 	out := SanitizedBody{View: view, HasHTML: strings.TrimSpace(msg.HTML) != ""}
 
+	// The raw view interprets nothing, so there is nothing to sanitise and
+	// nothing withheld. HasHTML is still reported, because the controls above
+	// the body use it to decide which other rungs are worth offering -- what
+	// is NOT reported is a blocked-image count, which would put a notice about
+	// images over a document that is showing the message's own bytes.
+	//
+	// The document itself does not come from here: handleMessageBody writes
+	// msg.Raw straight out as text/plain. This only fills in what the reader
+	// around it needs to know.
+	if view.IsSource() {
+		return out
+	}
+
 	if !view.IsHTML() {
 		text := msg.Text
 		if strings.TrimSpace(text) == "" && out.HasHTML {

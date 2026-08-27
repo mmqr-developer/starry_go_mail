@@ -95,6 +95,22 @@ type Config struct {
 	// deployment that works. See clientip.go.
 	TrustedProxies []string `json:"trusted_proxies"`
 
+	// AllowedOrigins are extra addresses this deployment answers to, for the
+	// cross-origin check on state-changing requests (see origin.go).
+	//
+	// **Usually empty, and usually should be.** The check compares the Origin
+	// header against the Host the request arrived with, so a reverse proxy
+	// configured the ordinary way -- passing the client's Host through -- needs
+	// nothing here. This is for the two cases where that is not true: a proxy
+	// that rewrites Host, and an app served at more than one name.
+	//
+	// Either a full origin ("https://mail.example.org") or a bare host
+	// ("mail.example.org"); both are matched. Adding "*" does nothing: there
+	// is deliberately no way to switch the check off from the config, because
+	// a setting whose only use is to disable a security check is a setting
+	// somebody will find and use.
+	AllowedOrigins []string `json:"allowed_origins"`
+
 	// DefaultIMAP/DefaultSMTP prefill the "add a mail account" form. A
 	// convenience for a single-server deployment; a user may always override
 	// them, and they are not a restriction on what can be added.

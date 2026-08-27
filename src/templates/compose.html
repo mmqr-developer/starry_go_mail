@@ -17,7 +17,6 @@
        below. */}}
   <form class="compose" method="POST" action="/app/compose/send" data-compose
         aria-label="{{if .IsReply}}Reply{{else}}New message{{end}}">
-    <input type="hidden" name="folder" value="{{$.Folder}}">
     <input type="hidden" name="in_reply_to" value="{{.Draft.InReplyTo}}">
     <input type="hidden" name="references" value="{{.Draft.References}}">
     {{/* The editor is a contenteditable and contenteditable is not a form
@@ -170,7 +169,7 @@
         <span class="sr-only">Full screen</span>
       </label>
 
-      <a hx-boost="true" class="btn" href="/app/mailbox?folder={{$.Folder}}"
+      <a hx-boost="true" class="btn" href="/app/"
          title="Close" aria-label="Discard and close">{{icon "close"}}</a>
     </div>
 

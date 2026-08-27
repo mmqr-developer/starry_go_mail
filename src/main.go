@@ -87,9 +87,10 @@ type App struct {
 	// See contacts.go.
 	contacts *ContactStore
 
-	// timed remembers which message-list row each session was sent with a
-	// reading timer on it, so the next click can kill it. See timedrows.go.
-	timed *timedRows
+	// views holds where each signed-in browser is in the mailbox: folder,
+	// page, sort, search, open message, body view and ticked rows. The server
+	// owns all of it so that no button has to carry it. See viewstate.go.
+	views *viewStore
 
 	// prefs2 is the per-mailbox settings store. Named apart from `settings`,
 	// which is the deployment's own, because the whole point is that they are
@@ -181,6 +182,17 @@ func run(debug bool, listenOverride string, log *slog.Logger) (err error) {
 	if err != nil {
 		return fmt.Errorf("cannot set up encryption for stored mail passwords: %w", err)
 	}
+	// Where the pepper came from, at INFO and only ever the source -- never the
+	// value. This one line is what makes the key-check failure below
+	// diagnosable: the two logs side by side say what changed between them.
+	log.Info("encryption", "pepper", pepperSource())
+	// Fatal on purpose. A server that starts with a key that cannot read its
+	// own database has no good next move, and every minute it stays up is
+	// another chance for something to write ciphertext under the wrong key
+	// beside the old. See keycheck.go.
+	if err := verifyEncryptionKey(context.Background(), db, sealer, pepperSource()); err != nil {
+		return err
+	}
 	secret, err := initSessionSecret(cfg, log)
 	if err != nil {
 		return err
@@ -206,7 +218,7 @@ func run(debug bool, listenOverride string, log *slog.Logger) (err error) {
 		images:      NewImageStore(log),
 		attachments: NewAttachStore(log),
 		contacts:    NewContactStore(db),
-		timed:       newTimedRows(),
+		views:       newViewStore(),
 		prefs2:      NewMailboxSettings(db),
 		scans:       newScanStores(cfg.ConfigDir()),
 	}
@@ -221,6 +233,8 @@ func run(debug bool, listenOverride string, log *slog.Logger) (err error) {
 	// -- there is no mode in which they do not exist, so there is no mode in
 	// which their credentials do not need expiring out of memory.
 	go app.sweepDirectSessions()
+	// And the view state beside them: the same lifetime, evicted the same way.
+	go app.sweepViewState()
 	// The throttle's own retention: failures for a day, block history for a
 	// month. Daily, and once immediately -- a server restarted every day would
 	// otherwise never reach the first tick.
@@ -355,7 +369,9 @@ func (a *App) routes() http.Handler {
 
 	// Compression sits inside the logger, so the log still records the status
 	// of what went out, and outside the mux, so no route can forget it.
-	return a.requestLogger(a.compressResponses(a.securityHeaders(mux)))
+	// checkOrigin sits inside the logger so a refusal is logged, and outside
+	// everything that acts, so nothing acts before it has run.
+	return a.requestLogger(a.compressResponses(a.securityHeaders(a.checkOrigin(mux))))
 }
 
 // securityHeaders applies the headers this app depends on.
@@ -379,7 +395,24 @@ func (a *App) securityHeaders(next http.Handler) http.Handler {
 				"object-src 'none'; "+
 				"frame-ancestors 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
+		// same-origin, not no-referrer, and the difference matters more than
+		// it looks.
+		//
+		// Cross-origin behaviour is identical: nothing is sent, so a link
+		// followed out of this app still tells the other server nothing. What
+		// changes is same-origin, where a Referer now travels -- to this
+		// server, about its own pages, which are all one URL anyway.
+		//
+		// **no-referrer breaks the Origin check.** Per Fetch, a request whose
+		// referrer policy is no-referrer has its Origin header serialised as
+		// "null" -- including a same-origin form post. Every POST this app
+		// makes therefore arrived as Origin: null, indistinguishable from a
+		// sandboxed iframe, and the check refused the app's own login form.
+		// Found by signing in, not by any test.
+		//
+		// The body and source endpoints, which carry a sender's content and
+		// its links, set no-referrer for themselves and keep it.
+		h.Set("Referrer-Policy", "same-origin")
 		h.Set("X-Frame-Options", "DENY")
 		next.ServeHTTP(w, r)
 	})

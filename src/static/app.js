@@ -121,22 +121,14 @@
     addToggles(evt.target);
   });
 
-  // 4. Select-all in the message list.
+  // 4. Select-all used to live here, ticking every .msg-check by hand.
   //
-  // Delegated from the document rather than bound per render, because the list
-  // is re-rendered on every navigation and a bound handler would be lost each
-  // time. The individual checkboxes are ordinary form controls, so with
-  // scripting off the toolbar still works -- one message at a time, which is
-  // the honest degradation.
-  document.addEventListener('change', function (evt) {
-    var box = evt.target;
-    if (!box || !box.dataset || box.dataset.checkAll === undefined) return;
-    var form = box.closest('form');
-    if (!form) return;
-    form.querySelectorAll('input.msg-check').forEach(function (c) {
-      c.checked = box.checked;
-    });
-  });
+  // It is a server verb now (POST /app/list/select/all): the selection is the
+  // server's, so the honest way to tick everything is to say so and be sent
+  // back a list drawn from the new record. That also fixed what this could not
+  // do -- a box ticked here was lost the next time the list re-rendered, which
+  // is on every action and every arrival, because nothing but the browser knew
+  // about it.
 
   // 5. Print the open message.
   //
