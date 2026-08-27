@@ -63,6 +63,27 @@ func TestAcceptedEncodings(t *testing.T) {
 	}
 }
 
+// requireCompressedSiblings skips a test that cannot mean anything without the
+// pre-compressed assets.
+//
+// build.sh writes the .brotli and .gz siblings before it runs the tests, so in
+// the normal flow they are always there and these tests always run. They are
+// NOT committed -- .gitignore excludes them and the publish script's rsync
+// excludes them again -- so a fresh clone has none, and every test that
+// negotiates an encoding failed for anyone who cloned the public repository
+// and typed `go test ./...`.
+//
+// A skip and not a pass: the message says how to make them run. What must not
+// happen is a green suite that quietly verified nothing, which is why
+// TestCompressedSiblingsMatchTheirSources counts what it checked.
+func requireCompressedSiblings(t *testing.T) {
+	t.Helper()
+	if _, err := staticFS.ReadFile("static/mail.css.gz"); err != nil {
+		t.Skip("no pre-compressed assets embedded -- run ./build.sh, which " +
+			"generates them; they are not committed")
+	}
+}
+
 func staticGet(t *testing.T, a *App, url, accept string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest("GET", url, nil)
@@ -75,6 +96,7 @@ func staticGet(t *testing.T, a *App, url, accept string) *httptest.ResponseRecor
 }
 
 func TestStaticNegotiatesTheEncoding(t *testing.T) {
+	requireCompressedSiblings(t)
 	a := &App{}
 
 	plain := staticGet(t, a, "/static/mail.css", "identity")
@@ -138,6 +160,7 @@ func TestStaticNegotiatesTheEncoding(t *testing.T) {
 // gzip is the point of the fallback: it has to be genuine gzip, not brotli with
 // the wrong label, and it has to decompress to the file itself.
 func TestStaticGzipIsRealGzip(t *testing.T) {
+	requireCompressedSiblings(t)
 	a := &App{}
 	rec := staticGet(t, a, "/static/mail.css", "gzip")
 	body := rec.Body.Bytes()
@@ -260,7 +283,8 @@ func TestCompressedSiblingsMatchTheirSources(t *testing.T) {
 		checked++
 	}
 	if checked == 0 {
-		t.Error("no compressed siblings are embedded, so nothing was verified")
+		t.Skip("no compressed siblings are embedded -- run ./build.sh, which " +
+			"generates them; they are not committed")
 	}
 }
 
