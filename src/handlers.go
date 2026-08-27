@@ -624,6 +624,9 @@ func (a *App) handleOpenMessage(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Read before the change: the row losing the highlight has to be sent back
+	// plain, and this is where it is still known.
+	d.PrevOpenUID = a.viewOf(r).OpenUID
 	a.updateView(r, func(v *viewState) {
 		v.OpenUID = uid
 		// A newly opened message starts on the deployment's default rung.
@@ -660,6 +663,7 @@ func (a *App) handleReaderStep(back bool) http.HandlerFunc {
 			step = prev
 		}
 		if step != 0 {
+			d.PrevOpenUID = v.OpenUID
 			a.updateView(r, func(v *viewState) {
 				v.OpenUID = step
 				v.View = ""
@@ -898,7 +902,14 @@ func (a *App) renderReader(w http.ResponseWriter, r *http.Request, d *PageData, 
 		//
 		// The row itself is taken from the page fetched above, so knowing
 		// about it costs no extra trip.
-		if prev := a.setTimedRow(r, d.TimedRow); prev != 0 {
+		prev := a.setTimedRow(r, d.TimedRow)
+		// The row that was OPEN until this click, which is the more general
+		// case: a message already read carried no timer, so the branch above
+		// answers zero for it and its highlight would stay behind.
+		if d.PrevOpenUID != 0 && d.PrevOpenUID != uint32(uid64) {
+			prev = d.PrevOpenUID
+		}
+		if prev != 0 {
 			for _, sum := range page.Messages {
 				if sum.UID == prev {
 					d.PrevRow = sum
@@ -1048,10 +1059,15 @@ func firstHeader(raw []byte, name string) string {
 // handleMessageAction is every mutation the toolbars can perform.
 //
 // One handler because the reader's buttons and the list's buttons mean the same
-// things -- the only difference is whether the UID set came from the open
-// message or from the checkboxes. `uid` may repeat; an action that names none
-// is a no-op rather than an error, because "delete" with nothing selected is a
-// misclick and refusing it with a 400 page loses the user their place.
+// verbs. What differs is which set they act on, and the toolbar says so:
+// the reader's carries scope=open and means the message being read, the list's
+// carries nothing and means the ticked rows, falling back to the open message
+// when none are ticked. See selectedUIDs.
+//
+// An action that names nothing is not an error -- "delete" with nothing
+// selected is a misclick, and a 400 page would lose the user their place --
+// but it is not silent either, which it was for long enough to be reported as
+// four broken buttons.
 func (a *App) handleMessageAction(w http.ResponseWriter, r *http.Request) {
 	d, imapPw, ok := a.mailContext(w, r, "mailbox", "Mail")
 	if !ok {

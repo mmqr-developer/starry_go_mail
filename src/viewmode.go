@@ -5,8 +5,10 @@ import (
 	"strings"
 )
 
-// How a message body is rendered, and why there are four choices rather than a
-// checkbox.
+// How a message body is rendered: four rungs of a ladder, plus a raw view that
+// is not on it.
+//
+// The ladder is why there are four choices rather than a checkbox.
 //
 // A mail body is the one thing in this app written by somebody outside it, and
 // the three risks it carries are separable:
@@ -93,9 +95,13 @@ func (v BodyView) ShowsInlineImages() bool { return bodyViewRank(v) >= 2 }
 // ShowsRemoteImages reports whether images are fetched from the network.
 func (v BodyView) ShowsRemoteImages() bool { return bodyViewRank(v) >= 3 }
 
-// bodyViewLabels drives the segmented control in the reader, in ladder order.
-// Kept here rather than in the template so the wording, the order and the
-// meaning stay in one place.
+// bodyViewLabels drives the segmented control in the reader.
+//
+// Src first and then the ladder in order. Src is deliberately leftmost and
+// deliberately not part of that order: it is the view that interprets nothing,
+// so it sits below the bottom rung rather than on the way up. Kept here rather
+// than in the template so the wording, the order and the meaning stay in one
+// place.
 var bodyViewLabels = []struct {
 	View  BodyView
 	Label string

@@ -94,8 +94,9 @@ type viewState struct {
 	Selected map[uint32]bool
 
 	// TimedRow is the row last sent with a reading timer on it, so the next
-	// click can kill it. Was its own map keyed the same way for the same
-	// lifetime; see the note on the timedRows type this replaced.
+	// click can kill it. It had a map of its own, keyed the same way and for
+	// the same lifetime, which is why it was folded in here rather than kept
+	// beside this one. See setTimedRow for what it is for.
 	TimedRow uint32
 
 	touched time.Time

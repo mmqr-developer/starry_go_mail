@@ -52,7 +52,7 @@
      message is shown -- plain text, HTML, with images -- changes nothing
      about the folder list or the message list beside it, so re-rendering
      those costs an IMAP round trip and repaints two panes to change a
-     third. handleMessage renders this alone when htmx says it is what
+     third. renderReader draws this alone when htmx says it is what
      the request is aimed at; see paneRequest.
 
      It keeps the id the swap targets, so an outerHTML swap replaces it
@@ -237,13 +237,18 @@
         </div>
       </div>
 
-      {{/* The view ladder. Four links rather than a "show images" toggle,
+      {{/* The view ladder: four rungs rather than a "show images" toggle,
            because markup, the sender's own images and remote images are three
-           separate decisions -- viewmode.go has the reasoning. Links and not
-           buttons: each one is a different rendering of the same message at a
-           URL of its own, so it is shareable, bookmarkable and works with the
-           back button. */}}
-      {{/* ONE form around the whole control, with the rung as each button's
+           separate decisions -- viewmode.go has the reasoning -- plus Src,
+           which is not on the ladder at all and is explained there too.
+
+           These were links once, each a rendering of the message at a URL of
+           its own, so a rung was shareable and the back button walked them.
+           They are buttons posting a verb now: which rung a message is at is
+           the server's, like everything else about where the user is, and
+           there is no URL left for it to live in.
+
+           ONE form around the whole control, with the rung as each button's
            own name/value rather than a hidden field per rung. A submit button
            contributes exactly one name/value pair and one is all this needs,
            so the rungs stay siblings of each other -- a form apiece would make
@@ -396,13 +401,14 @@
      Its own definition because the reading pane has two states and only one of
      them has a toolbar: arriving from the mailbox there is nothing in it, so
      the whole thing has to be sent; arriving from another message it is
-     already on screen and only the pieces naming the message need to follow.
-     See handleMessage.
+     already on screen and only the pieces that change with it need to follow.
+     See renderReader.
 
-     Every button in it acts on the open message, so they share one form
-     carrying its UID. The verb rides in each button's own formaction -- see
-     the note in the list template. */}}
-{{/* Every button in it acts on the open message, and none of them names it.
+     Every button in it acts on the open message, and none of them names it:
+     the server knows which message that is. What this form does carry is
+     scope=open -- which SET the buttons act on, the message being read rather
+     than the rows ticked in the list. That is a constant of the control, not a
+     position, so unlike a UID it cannot go stale.
      **hx-post beside every formaction.** A submit button's formaction is the
      no-script path: the browser posts to it and the whole page comes back. It
      is NOT something htmx reads -- a boosted form uses the FORM's action and

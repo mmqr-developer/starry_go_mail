@@ -969,54 +969,20 @@
     fields.forEach(function (f) { f.value = tz; });
   })();
 
-  // 8d. The open-message highlight, after a pane swap.
+  // 8d. The open-message highlight used to be fixed up here, after every swap.
   //
-  // Opening a message swaps the reading pane and sends back the one row that
-  // changed. The row that *was* open is not in that response -- the server has
-  // no way to know which one it was -- so its highlight would stay behind and
-  // the list would show two messages open at once.
+  // It is the server's now. The comment that used to be here said the server
+  // "has no way to know which one it was" -- true when it was written, and
+  // untrue from the moment viewState started holding the open message. The
+  // handler that acted on it went stale without ever failing loudly: it looked
+  // for the reading pane's `uid` field, which no longer exists, and for
+  // `a.msg`, which is a <button> now. So it stripped the highlight from rows
+  // it should have left alone and left `aria-current` on the row it should
+  // have cleaned -- a screen reader announcing two current messages, which is
+  // exactly the kind of thing nobody sees.
   //
-  // Purely presentational, which is why it is done here rather than by
-  // re-rendering the list: the alternative is an IMAP round trip and a
-  // repaint of every row to move one outline.
-  document.body.addEventListener('htmx:afterSwap', function () {
-    // Which message is open is a fact about the reading pane, not about the
-    // list: the first .is-open row in document order may well be the stale
-    // one. The pane's toolbar carries the uid it is showing.
-    var uid = document.querySelector('form.view-toolbar input[name=uid]');
-    var openId = uid ? 'msg-' + uid.value : '';
-    document.querySelectorAll('.msg-row.is-open').forEach(function (row) {
-      if (row.id === openId) return;
-      row.classList.remove('is-open');
-      var link = row.querySelector('a.msg');
-      if (link) link.removeAttribute('aria-current');
-    });
-  });
-
-  // 8d2. Telling the server what this page already has.
-  //
-  // A message click sends back either the whole reading pane or just the
-  // message and the toolbar pieces that name it, and the difference is whether
-  // the pane is already drawn. The server used to infer that from the URL,
-  // which is a guess about the DOM: a tab still holding markup from an earlier
-  // build has a URL that says one thing and elements that say another, and the
-  // out-of-band swaps then have nothing to land on. htmx removes them and the
-  // click half-works -- which is what "gone wonky" looked like.
-  //
-  // This is the DOM's own answer, read at the moment of the request.
-  document.body.addEventListener('htmx:configRequest', function (evt) {
-    // #msg-state, not #msg-toolbar. The toolbar element is on the mailbox
-    // screen too -- an empty form, waiting for a message to be opened -- so
-    // asking whether it exists answers yes when there is nothing in it to
-    // patch, the server sends the pieces instead of the whole toolbar, and
-    // htmx drops them for want of targets. The bar then stays empty, which is
-    // exactly what that looked like.
-    //
-    // #msg-state is the hidden uid, and it is rendered only when the toolbar
-    // has a message in it. Its presence is the question being asked.
-    evt.detail.headers['X-Reader-Pane'] =
-      document.getElementById('msg-state') && document.getElementById('msg-content') ? '1' : '0';
-  });
+  // renderReader sends the previously-open row back out-of-band instead; see
+  // PageData.PrevOpenUID.
 
   // 8e. The unread badge, when a message is opened.
   //

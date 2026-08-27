@@ -1215,3 +1215,68 @@ func TestWhichActionsAdvanceTheReader(t *testing.T) {
 		})
 	}
 }
+
+// The row that stops being the open one comes back plain.
+//
+// This was app.js's job and app.js could not do it: the handler looked for the
+// reading pane's `uid` field, which the refactor removed, and for `a.msg`,
+// which is a <button> now. It went on running and silently doing the wrong
+// thing -- stripping the highlight from rows it should have left alone, and
+// leaving aria-current on the row it should have cleaned, so a screen reader
+// announced two current messages. The server knows which row it is; it just
+// was not saying.
+func TestThePreviouslyOpenRowComesBackPlain(t *testing.T) {
+	a, c := mailFlow(t, nil, 5)
+	a.do(t, c, "GET", "/app/", nil)
+	a.do(t, c, "POST", "/app/open/message", url.Values{"uid": {"3"}})
+
+	// The second click, as htmx makes it: aimed at the row being clicked.
+	r := httptest.NewRequest("POST", "/app/open/message",
+		strings.NewReader(url.Values{"uid": {"5"}}.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("HX-Request", "true")
+	r.Header.Set("HX-Target", "msg-5")
+	r.AddCookie(c)
+	w := httptest.NewRecorder()
+	a.routes().ServeHTTP(w, r)
+	body := w.Body.String()
+
+	// The row that was open has to be in the answer at all -- nothing else can
+	// clear it, and it is not what the request was aimed at.
+	if !strings.Contains(body, `id="msg-3"`) {
+		t.Fatalf("the previously open row was not sent back:\n%s", firstLines(body, 40))
+	}
+	row3 := body[strings.Index(body, `id="msg-3"`):]
+	if end := strings.Index(row3, "</div>"); end > 0 {
+		row3 = row3[:end]
+	}
+	if strings.Contains(row3, "is-open") {
+		t.Errorf("the old row is still drawn as open:\n%s", row3)
+	}
+	if strings.Contains(row3, "aria-current") {
+		t.Errorf("the old row still announces itself as current:\n%s", row3)
+	}
+	// And it travels out of band, because the request was aimed at msg-5.
+	if !strings.Contains(row3, "hx-swap-oob") {
+		t.Errorf("the old row was sent without hx-swap-oob, so it lands nowhere:\n%s", row3)
+	}
+}
+
+// The same when stepping with Next, which also changes which row is open.
+func TestSteppingAlsoClearsTheRowItLeft(t *testing.T) {
+	a, c := mailFlow(t, nil, 4)
+	a.do(t, c, "GET", "/app/", nil)
+	a.do(t, c, "POST", "/app/open/message", url.Values{"uid": {"3"}})
+
+	r := httptest.NewRequest("POST", "/app/reader/next", nil)
+	r.Header.Set("HX-Request", "true")
+	r.Header.Set("HX-Target", "msg-2")
+	r.AddCookie(c)
+	w := httptest.NewRecorder()
+	a.routes().ServeHTTP(w, r)
+
+	body := w.Body.String()
+	if !strings.Contains(body, `id="msg-3"`) {
+		t.Fatalf("stepping did not send the row it left:\n%s", firstLines(body, 40))
+	}
+}

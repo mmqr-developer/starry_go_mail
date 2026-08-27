@@ -535,8 +535,8 @@ func specialUseOf(m *imap.ListData) string {
 //
 // Split out from specialUseOf so it can be tested directly, because two things
 // depend on it agreeing with itself: the toolbar decides whether to draw the
-// Junk and Archive buttons from it, and ensureTrash decides whether a mailbox
-// already has somewhere for deleted mail. If those two ever read the same
+// Junk and Archive buttons from it, and ensureStandardFolders decides whether a
+// mailbox already has somewhere for deleted mail. If those two ever read the same
 // folder differently, Delete would flag \Deleted while a Trash folder sat
 // there unused.
 //
@@ -1650,7 +1650,7 @@ func (p *Pool) FetchMessage(acct *MailAccount, password, folder string, uid uint
 			// level before this app had any say. The consequence was that
 			// `mark_read_on_open = off` did nothing at all, and no delay
 			// before marking read was possible: the fetch had already done
-			// it. With PEEK, the explicit SetFlag in handleMessage is the
+			// it. With PEEK, the explicit SetFlag in renderReader is the
 			// only thing that marks a message read, which is what makes the
 			// setting mean something.
 			BodySection: []*imap.FetchItemBodySection{{Peek: true}}, // {} == the whole message

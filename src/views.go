@@ -127,6 +127,20 @@ type PageData struct {
 	// longer running.
 	PrevRow *MessageSummary
 
+	// PrevOpenUID is the message that WAS open when this request arrived, set
+	// by the handlers that change it before they change it.
+	//
+	// **The server is the only party that knows this, and for a while it did
+	// not admit it.** app.js used to strip the stale highlight in the browser
+	// on every swap, with a comment saying the server had no way to know which
+	// row it was -- true when it was written, and untrue from the moment
+	// viewState started holding the open message. The script also went stale
+	// without failing: it looked for the toolbar's `uid` field, which no
+	// longer exists, and for `a.msg`, which is a button now -- so it removed
+	// the highlight from rows it should not have and left `aria-current`
+	// behind on the one it should have cleaned.
+	PrevOpenUID uint32
+
 	// TimedRow is the row being sent with a reading timer on it: the open
 	// message, still unread, where the deployment marks messages read on
 	// open. Decided in Go rather than in the template so that what the server
@@ -620,10 +634,18 @@ func rowRequest(r *http.Request) bool {
 		rowTarget.MatchString(r.Header.Get("HX-Target"))
 }
 
-// toolbarPieces are the parts of the reader's toolbar that name the open
-// message. Listed once: a handler that sent six of them would leave the
-// seventh describing the message before this one, and the one most likely to
-// be forgotten is the star.
+// toolbarPieces are the parts of the reader's toolbar that change when the
+// open message changes.
+//
+// Not "the parts that name it" any more: tb-state carries only which SET the
+// buttons act on, and tb-nav posts next and prev without naming either. What
+// is left is the pieces whose CONTENT is about this message -- whether it is
+// starred, whether replying is offered, and the three links that fetch it as
+// its own document.
+//
+// Listed once: a handler that sent six of them would leave the seventh
+// describing the message before this one, and the one most likely to be
+// forgotten is the star.
 var toolbarPieces = []string{
 	"tb-state", "tb-flag", "tb-send", "tb-nav",
 	"tb-open", "tb-source", "tb-download",

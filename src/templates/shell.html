@@ -88,7 +88,7 @@
 
 
 {{/* Pane 2B: the search row, and the tick-everything box beside it. The id
-     is list-search-bar rather than list-search: the GET form that carries the
+     is list-search-bar rather than list-search: the form that carries the
      query already owns that one. */}}
 {{define "list-search-bar"}}<div id="list-search-bar" class="list-header"{{if .IsOOB "list-search-bar"}} hx-swap-oob="true"{{end}}>
       {{/* Ticks every row on this page, or clears them if they are all
@@ -406,13 +406,11 @@
      why it is its own template: clicking a message re-renders the whole
      three-pane frame, so the list has to draw identically in both.
 
-     Everything below the search box lives inside ONE form posting to
-     /app/messages/action, so the row checkboxes are what the toolbar buttons
-     act on. Each button carries its own `formaction` with the verb (and, for
-     Move, the destination) in the query string, because a submit button can
-     contribute only one name/value pair of its own and these need two. Go's
-     FormValue reads the query string as well as the body, so the two arrive
-     together. No script is involved in any of it. */}}
+     Everything below the search box lives inside ONE form, so the row
+     checkboxes are what the toolbar buttons act on with scripting off. Each
+     button carries its own `formaction` naming the verb -- /app/do/archive
+     and so on, the verb in the path rather than a query string -- and an
+     hx-post saying the same thing, because htmx does not read formaction. */}}
 {{/* One row of the message list.
 
      **A row must always tell the truth about the seen flag, first time.**
@@ -538,11 +536,6 @@
 
 {{define "list"}}
 <section id="list-pane" class="list-pane" aria-label="Messages"{{if .IsOOB "list"}} hx-swap-oob="true"{{end}}>
-  {{/* The search is a GET form and the list is a POST form, and forms cannot
-       nest -- so the search form is an empty sibling holding only its hidden
-       fields, and its visible controls sit in the card's header row carrying
-       `form="list-search"`. That is what puts the search box inside the card,
-       where the original has it, without either form swallowing the other. */}}
   {{/* Both empty on purpose. Controls scattered through the list reach them
        with form="...", because the list itself is already a form and forms do
        not nest -- see the note on the message row.
@@ -567,13 +560,6 @@
   <form id="list-search" method="POST" action="/app/list/search" role="search"
         hx-post="/app/list/search" hx-target="#app-body" hx-swap="outerHTML"></form>
 
-  {{/* Everything below is ONE form posting to /app/messages/action, so the row
-       checkboxes are what the toolbar buttons act on. Each button carries its
-       own `formaction` with the verb (and, for Move, the destination) in the
-       query string, because a submit button can contribute only one name/value
-       pair of its own and these need two. Go's FormValue reads the query string
-       as well as the body, so the two arrive together. No script is involved in
-       any of it. */}}
   {{/* No hidden fields. This form used to restate the folder, the page, the
        search, the sort and the open message on every render, and post all five
        back with every toolbar press -- so any control that forgot one silently
